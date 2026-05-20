@@ -1,0 +1,152 @@
+<mujoco model="two_wheel_legged_robot_realistic">
+  <!--
+    Simplified but development-oriented two wheel-legged robot model.
+    Goal: RL-friendly baseline for rolling/sliding, balancing, and wheel-assisted stepping.
+    Actuation: hip/knee position servos + wheel velocity servos.
+    Sensing: IMU, joint encoders, wheel encoders, contact/touch, front/downward range sensors.
+  -->
+
+  <compiler angle="radian" coordinate="local" inertiafromgeom="true"/>
+  <option timestep="0.002" integrator="RK4" gravity="0 0 -9.81" cone="elliptic" jacobian="dense" solver="Newton"/>
+
+  <size njmax="2000" nconmax="400"/>
+
+  <default>
+    <joint limited="true" damping="1.0" armature="0.02" frictionloss="0.02"/>
+    <geom contype="1" conaffinity="1" margin="0.001" condim="6"
+          friction="1.2 0.08 0.02" solref="0.01 1" solimp="0.9 0.95 0.001"/>
+
+    <!-- Position-controlled leg joints, similar to real servo-level target position control. -->
+    <position kp="70" kv="4" ctrllimited="true" forcelimited="true"/>
+
+    <!-- Velocity-controlled wheels, closer to motor driver velocity command. -->
+    <velocity kv="8" ctrllimited="true" forcelimited="true"/>
+  </default>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.9 0.9 0.9" rgb2="0.55 0.55 0.55"
+             width="300" height="300" mark="edge" markrgb="0.2 0.2 0.2"/>
+    <material name="ground_mat" texture="grid" texrepeat="4 4" texuniform="true" reflectance="0.15"/>
+    <material name="body_mat" rgba="0.15 0.18 0.22 1"/>
+    <material name="link_mat" rgba="0.85 0.62 0.20 1"/>
+    <material name="wheel_mat" rgba="0.02 0.02 0.025 1"/>
+    <material name="sensor_mat" rgba="0.1 0.45 0.9 1"/>
+  </asset>
+
+  <worldbody>
+    <light name="sun" directional="true" pos="0 0 4" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
+    <camera name="overview" pos="-3 -3 2" xyaxes="0.707 -0.707 0 0.35 0.35 0.866"/>
+    <geom name="ground" type="plane" size="20 20 0.1" material="ground_mat"/>
+
+    <!-- Optional terrain obstacles for later curriculum. Keep disabled initially if training is unstable. -->
+    <geom name="low_step" type="box" pos="2.0 0 0.04" size="0.35 1.2 0.04" rgba="0.45 0.45 0.45 1"/>
+    <geom name="small_bump" type="sphere" pos="3.0 0 0.05" size="0.12" rgba="0.35 0.35 0.35 1"/>
+
+    <!-- ================= Robot ================= -->
+    <body name="base" pos="0 0 0.80">
+      <freejoint name="floating_base"/>
+
+      <!-- Main body: simplified electronics/battery chassis. -->
+      <inertial pos="0 0 0" mass="7.5" diaginertia="0.16 0.10 0.18"/>
+      <geom name="base_collision" type="box" size="0.28 0.16 0.09" material="body_mat"/>
+      <geom name="front_sensor_bar" type="box" pos="0.30 0 0.045" size="0.025 0.12 0.025" material="sensor_mat" contype="0" conaffinity="0"/>
+
+      <!-- Sites for realistic onboard sensors. -->
+      <site name="imu_site" pos="0 0 0.04" size="0.012" rgba="0 1 0 1"/>
+      <site name="camera_site" pos="0.33 0 0.06" euler="0 0 0" size="0.015" rgba="0 0.4 1 1"/>
+      <camera name="front_camera" mode="fixed" pos="0.34 0 0.07" xyaxes="0 -1 0 0 0 1" fovy="70"/>
+
+      <!-- Downward/front rangefinder sites. Their local +Z direction is the sensing ray in MuJoCo. -->
+      <site name="ray_front_center" pos="0.38 0 0.03" euler="0 1.05 0" size="0.006" rgba="1 0 0 1"/>
+      <site name="ray_front_left"   pos="0.32 0.10 0.03" euler="0 1.05 0" size="0.006" rgba="1 0 0 1"/>
+      <site name="ray_front_right"  pos="0.32 -0.10 0.03" euler="0 1.05 0" size="0.006" rgba="1 0 0 1"/>
+      <site name="ray_down_center"  pos="0.05 0 0.00" euler="0 3.14159 0" size="0.006" rgba="1 0 0 1"/>
+
+      <!-- Left leg: hip pitch + knee pitch + active wheel. -->
+      <body name="left_upper_leg" pos="0 0.18 -0.03">
+        <joint name="left_hip_pitch" type="hinge" axis="0 1 0" range="-1.2 1.2" damping="1.5"/>
+        <geom name="left_thigh" type="capsule" fromto="0 0 0 0 0 -0.28" size="0.035" material="link_mat" mass="0.75"/>
+
+        <body name="left_lower_leg" pos="0 0 -0.28">
+          <joint name="left_knee_pitch" type="hinge" axis="0 1 0" range="-2.2 0.15" damping="1.2"/>
+          <geom name="left_shin" type="capsule" fromto="0 0 0 0 0 -0.28" size="0.03" material="link_mat" mass="0.55"/>
+
+          <body name="left_wheel" pos="0 0 -0.30">
+            <joint name="left_wheel_joint" type="hinge" axis="0 1 0" limited="false" damping="0.03" armature="0.01" frictionloss="0.005"/>
+            <geom name="left_wheel_geom" type="cylinder" size="0.095 0.035" quat="0.7071068 0.7071068 0 0"
+                  material="wheel_mat" mass="0.45" friction="1.6 0.03 0.005"/>
+            <site name="left_wheel_contact" pos="0 0 -0.095" size="0.018" rgba="1 0.2 0.2 1"/>
+          </body>
+        </body>
+      </body>
+
+      <!-- Right leg: mirrored. -->
+      <body name="right_upper_leg" pos="0 -0.18 -0.03">
+        <joint name="right_hip_pitch" type="hinge" axis="0 1 0" range="-1.2 1.2" damping="1.5"/>
+        <geom name="right_thigh" type="capsule" fromto="0 0 0 0 0 -0.28" size="0.035" material="link_mat" mass="0.75"/>
+
+        <body name="right_lower_leg" pos="0 0 -0.28">
+          <joint name="right_knee_pitch" type="hinge" axis="0 1 0" range="-2.2 0.15" damping="1.2"/>
+          <geom name="right_shin" type="capsule" fromto="0 0 0 0 0 -0.28" size="0.03" material="link_mat" mass="0.55"/>
+
+          <body name="right_wheel" pos="0 0 -0.30">
+            <joint name="right_wheel_joint" type="hinge" axis="0 1 0" limited="false" damping="0.03" armature="0.01" frictionloss="0.005"/>
+            <geom name="right_wheel_geom" type="cylinder" size="0.095 0.035" quat="0.7071068 0.7071068 0 0"
+                  material="wheel_mat" mass="0.45" friction="1.6 0.03 0.005"/>
+            <site name="right_wheel_contact" pos="0 0 -0.095" size="0.018" rgba="1 0.2 0.2 1"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <!-- Legs: target position commands. RL action can output desired joint angles. -->
+    <position name="left_hip_servo" joint="left_hip_pitch" ctrlrange="-1.2 1.2" forcerange="-80 80"/>
+    <position name="left_knee_servo" joint="left_knee_pitch" ctrlrange="-2.2 0.15" forcerange="-80 80"/>
+    <position name="right_hip_servo" joint="right_hip_pitch" ctrlrange="-1.2 1.2" forcerange="-80 80"/>
+    <position name="right_knee_servo" joint="right_knee_pitch" ctrlrange="-2.2 0.15" forcerange="-80 80"/>
+
+    <!-- Wheels: velocity commands. RL action can output desired wheel angular velocity. -->
+    <velocity name="left_wheel_velocity" joint="left_wheel_joint" ctrlrange="-35 35" forcerange="-35 35"/>
+    <velocity name="right_wheel_velocity" joint="right_wheel_joint" ctrlrange="-35 35" forcerange="-35 35"/>
+  </actuator>
+
+  <sensor>
+    <!-- Floating-base state / IMU-like sensors. -->
+    <framepos name="base_position" objtype="body" objname="base"/>
+    <framequat name="base_orientation" objtype="body" objname="base"/>
+    <velocimeter name="base_linear_velocity" site="imu_site"/>
+    <gyro name="base_angular_velocity" site="imu_site"/>
+    <accelerometer name="base_linear_acceleration" site="imu_site"/>
+
+    <!-- Joint encoders. -->
+    <jointpos name="left_hip_pos" joint="left_hip_pitch"/>
+    <jointpos name="left_knee_pos" joint="left_knee_pitch"/>
+    <jointpos name="right_hip_pos" joint="right_hip_pitch"/>
+    <jointpos name="right_knee_pos" joint="right_knee_pitch"/>
+    <jointvel name="left_hip_vel" joint="left_hip_pitch"/>
+    <jointvel name="left_knee_vel" joint="left_knee_pitch"/>
+    <jointvel name="right_hip_vel" joint="right_hip_pitch"/>
+    <jointvel name="right_knee_vel" joint="right_knee_pitch"/>
+
+    <!-- Wheel encoders. -->
+    <jointvel name="left_wheel_speed" joint="left_wheel_joint"/>
+    <jointvel name="right_wheel_speed" joint="right_wheel_joint"/>
+
+    <!-- Contact/load sensing near wheel-ground contact. -->
+    <touch name="left_wheel_touch" site="left_wheel_contact"/>
+    <touch name="right_wheel_touch" site="right_wheel_contact"/>
+
+    <!-- Simple exteroceptive perception: range sensors for terrain preview. -->
+    <rangefinder name="front_center_range" site="ray_front_center"/>
+    <rangefinder name="front_left_range" site="ray_front_left"/>
+    <rangefinder name="front_right_range" site="ray_front_right"/>
+    <rangefinder name="down_center_range" site="ray_down_center"/>
+  </sensor>
+
+  <keyframe>
+    <!-- A nominal crouched standing pose. qpos = 7 floating-base + 6 actuated/hinge qpos. -->
+    <key name="stand" qpos="0 0 0.62 1 0 0 0  0.35 -0.75 0  0.35 -0.75 0"/>
+  </keyframe>
+</mujoco>

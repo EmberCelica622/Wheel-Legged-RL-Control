@@ -2,7 +2,7 @@ import argparse
 import time
 import os, sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-import gym
+import gymnasium as gym
 import numpy as np
 import itertools
 import torch
@@ -31,8 +31,8 @@ parser.add_argument('--alpha', type=float, default=0.2, metavar='G',
                             term against the reward (default: 0.2)')
 parser.add_argument('--automatic_entropy_tuning', type=bool, default=False, metavar='G',
                     help='Automaically adjust α (default: False)')
-parser.add_argument('--seed', type=int, default=123456, metavar='N',
-                    help='random seed (default: 123456)')
+parser.add_argument('--seed', type=int, default=42, metavar='N',
+                    help='random seed (default: 42)')
 parser.add_argument('--batch_size', type=int, default=256, metavar='N',
                     help='batch size (default: 256)')
 parser.add_argument('--num_steps', type=int, default=10000001, metavar='N',

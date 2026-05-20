@@ -1,0 +1,12 @@
+torch
+torchvision
+torchaudio
+mujoco
+gymnasium
+stable-baselines3[extra]
+numpy
+scipy
+matplotlib
+pandas
+tqdm
+tensorboard
