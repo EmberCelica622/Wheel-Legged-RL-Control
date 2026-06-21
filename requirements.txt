@@ -4,6 +4,7 @@ torchaudio
 mujoco
 gymnasium
 stable-baselines3[extra]
+pyyaml
 numpy
 scipy
 matplotlib
