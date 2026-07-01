@@ -3,6 +3,60 @@
 ## Introduction
 This project is a simulation of a two-legged-wheeled robot based on a deep reinforcement learning approach. The simulator used is **MuJoco**. The specific approach is to firstly encapsulate the robot as a standard reinforcement learning Python interface according to the **gym** style, including state feedback, action, reward function, reset, etc. The robot is then used to interact with the mujoco model through the **Pytorch** framework. Secondly, the **SAC** algorithm is built through Pytorch framework to interact with the MuJoco model to make the robot reach the goal point.
 
+## Slide-flat PPO workflow
+
+The maintained slide-flat PPO entry points live in `scripts/`. Commands below
+assume the repository's configured `drl` Conda environment.
+
+Start a new run with an automatic id, or override its seed/run id:
+
+```powershell
+python scripts/train_slide_flat.py --config configs/slide_flat.yaml
+python scripts/train_slide_flat.py --config configs/slide_flat.yaml --seed 0
+python scripts/train_slide_flat.py --config configs/slide_flat.yaml --run-id debug_seed0
+```
+
+Every new run is self-contained:
+
+```text
+runs/slide_flat/v2/ppo_pd_baseline/20260630-153500_seed42/
+|-- config.yaml
+|-- metadata.json
+|-- checkpoints/
+|-- models/
+|   |-- final_model.zip
+|   `-- best_model.zip
+|-- eval/
+|   |-- evaluations.npz
+|   `-- metrics.json
+|-- logs/
+|   |-- tensorboard/
+|   |-- console/
+|   `-- tmp/
+`-- videos/
+```
+
+Play or evaluate a frozen run configuration:
+
+```powershell
+python scripts/play_slide_flat.py --run runs/slide_flat/v2/ppo_pd_baseline/<run_id>
+python scripts/play_slide_flat.py --model path/to/model.zip --config configs/slide_flat.yaml
+python scripts/evaluate_slide_flat.py --run runs/slide_flat/v2/ppo_pd_baseline/<run_id>
+python scripts/evaluate_slide_flat.py --model path/to/model.zip --config configs/slide_flat.yaml
+```
+
+View TensorBoard data for one run and run the automated checks:
+
+```powershell
+python -m tensorboard.main --logdir runs/slide_flat/v2/ppo_pd_baseline/<run_id>/logs/tensorboard
+python -m pytest tests/
+```
+
+Root configs describe the experiment and output root. Training resolves all
+artifact paths, writes the exact config to the run directory, and refuses to
+overwrite an existing explicit run id. Existing legacy runs and checkpoints
+are not migrated or modified.
+
 ## Environment Configuration
 The project was done on Ubuntu20.04 with the following Python versions and library versions:
 * Python 3.7.10
@@ -51,4 +105,3 @@ python main.py
 ```
 python test.py
 ```
-

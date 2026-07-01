@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -11,6 +10,8 @@ from stable_baselines3.common.callbacks import (
     CheckpointCallback,
     EvalCallback,
 )
+
+from common.run_manager import RunPaths
 
 
 class SlideDiagnosticsCallback(BaseCallback):
@@ -77,21 +78,12 @@ class SlideDiagnosticsCallback(BaseCallback):
 def build_slide_callbacks(
     cfg: dict[str, Any],
     eval_env: Any,
+    run_paths: RunPaths,
     n_envs: int = 1,
 ) -> CallbackList:
-    """Build diagnostics, checkpoint, and evaluation callbacks from YAML."""
-    base_dir = Path(cfg.get("_base_dir", ".")).expanduser().resolve()
-
-    def resolve(value: str | Path) -> Path:
-        path = Path(value).expanduser()
-        return path if path.is_absolute() else base_dir / path
-
+    """Build callbacks whose artifacts stay inside one run directory."""
     logging_cfg = cfg.get("logging", {})
     callback_cfg = cfg.get("callbacks", {})
-    checkpoint_dir = resolve(logging_cfg["checkpoint_dir"])
-    eval_log_dir = resolve(logging_cfg["eval_log_dir"])
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    eval_log_dir.mkdir(parents=True, exist_ok=True)
 
     divisor = max(int(n_envs), 1)
     checkpoint_freq = max(int(callback_cfg.get("checkpoint_freq", 50000)) // divisor, 1)
@@ -101,15 +93,15 @@ def build_slide_callbacks(
         SlideDiagnosticsCallback(int(logging_cfg.get("log_interval_steps", 1000))),
         CheckpointCallback(
             save_freq=checkpoint_freq,
-            save_path=str(checkpoint_dir),
-            name_prefix=str(logging_cfg.get("run_name", "slide_flat")),
+            save_path=str(run_paths.checkpoints),
+            name_prefix="ppo",
             save_replay_buffer=False,
             save_vecnormalize=False,
         ),
         EvalCallback(
             eval_env,
-            best_model_save_path=str(eval_log_dir),
-            log_path=str(eval_log_dir),
+            best_model_save_path=str(run_paths.models),
+            log_path=str(run_paths.eval),
             eval_freq=eval_freq,
             n_eval_episodes=int(callback_cfg.get("n_eval_episodes", 5)),
             deterministic=bool(callback_cfg.get("deterministic_eval", True)),

@@ -11,3 +11,4 @@ matplotlib
 pandas
 tqdm
 tensorboard
+pytest

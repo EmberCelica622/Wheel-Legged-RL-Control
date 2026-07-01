@@ -1,6 +1,16 @@
+seed: 42
+
+experiment:
+  task: slide_flat
+  env_variant: v2
+  name: ppo_pd_baseline
+
+output:
+  root_dir: runs
+  run_id: auto
+
 env:
-  xml_path: MujocoEnv/two_wheel_legged_robot_slide_flat.xml
-  seed: 1
+  xml_path: assets/MujocoEnv/two_wheel_legged_robot_slide_flat.xml
 
 sim:
   timestep: 0.002
@@ -46,8 +56,8 @@ command:
   yaw_rate: 0.0
 
 observation:
-  # v2: 28D including body-frame base linear velocity. Old 25D PPO
-  # checkpoints cannot be loaded into this environment.
+  # 28D including body-frame base linear velocity. Old 25D PPO checkpoints
+  # cannot be loaded into this environment.
   clip: 100.0
 
 reward:
@@ -83,8 +93,7 @@ ppo:
   vf_coef: 0.5
   max_grad_norm: 0.5
   verbose: 1
-  device: auto
-  seed: 1
+  device: cpu
   policy_kwargs:
     net_arch: [128, 128]
 
@@ -92,13 +101,7 @@ training:
   total_timesteps: 1000000
 
 logging:
-  tensorboard_log_dir: runs/slide_flat/tensorboard
-  checkpoint_dir: models/slide_flat/checkpoints
-  eval_log_dir: runs/slide_flat/eval
-  model_dir: models/slide_flat
-  run_name: slide_flat_pd_v2
   log_interval_steps: 1000
-  final_model_name: final_model
 
 callbacks:
   checkpoint_freq: 50000
@@ -107,6 +110,5 @@ callbacks:
   deterministic_eval: true
 
 play:
-  checkpoint: models/slide_flat/final_model.zip
   deterministic: true
   realtime_factor: 1.0
