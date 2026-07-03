@@ -178,6 +178,8 @@ class SlideFlatEnv(gym.Env):
         self.reward_cfg = self.cfg.get("reward", {})
         self.reward_weights = self.reward_cfg.get("weights", {})
         self.termination_cfg = self.cfg.get("termination", {})
+
+        # v2: stance regularization
         stance_cfg = self.reward_cfg.get("straight_stance", {})
         self.stance_regularization_enabled = bool(stance_cfg.get("enabled", False))
         self.stance_free_offset_m = float(

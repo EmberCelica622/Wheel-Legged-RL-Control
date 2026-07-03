@@ -77,17 +77,17 @@ reward:
     action_rate_penalty: 0.03
     joint_velocity_penalty: 0.001
     torque_penalty: 0.002
-    # ------ v2 ---------|+
+  # ------ v2 ---------|+
     wheel_longitudinal_offset_penalty: 0.10
-    straight_stance:
-      enabled: true
-      # 允许左右轮存在不超过 2 cm 的前后微小差异
-      free_longitudinal_offset_m: 0.02
-      # 用于无量纲化；超过 free zone 4 cm 时，原始 penalty 约为 1
-      longitudinal_offset_scale_m: 0.04
-      # 只有接近直线时启用。以后有明显转向 command 时自动失效。
-      yaw_rate_threshold: 0.05
-    # ------ v2 ---------|-
+  straight_stance:
+    enabled: true
+    # 允许左右轮存在不超过 2 cm 的前后微小差异
+    free_longitudinal_offset_m: 0.02
+    # 用于无量纲化；超过 free zone 4 cm 时，原始 penalty 约为 1
+    longitudinal_offset_scale_m: 0.04
+    # 只有接近直线时启用。以后有明显转向 command 时自动失效。
+    yaw_rate_threshold: 0.05
+  # ------ v2 ---------|-
 
 termination:
   min_base_height: 0.25
