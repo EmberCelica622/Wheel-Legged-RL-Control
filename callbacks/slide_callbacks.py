@@ -46,6 +46,10 @@ class SlideDiagnosticsCallback(BaseCallback):
                 info.get("mean_leg_joint_velocity"),
             )
             self._append("diagnostics/terminated_rate", float(info.get("terminated", False)))
+            self._append(
+                "diagnostics/wheel_longitudinal_offset",
+                info.get("wheel_longitudinal_offset"),
+            )
 
             reward_terms = info.get("reward_terms", {})
             if isinstance(reward_terms, dict):
@@ -61,6 +65,22 @@ class SlideDiagnosticsCallback(BaseCallback):
                 self._append(
                     "diagnostics/penalty_torque",
                     reward_terms.get("torque_penalty"),
+                )
+                self._append(
+                    "diagnostics/wheel_longitudinal_offset_abs_m",
+                    reward_terms.get("wheel_longitudinal_offset_abs_m"),
+                )
+                self._append(
+                    "diagnostics/wheel_longitudinal_offset_excess_m",
+                    reward_terms.get("wheel_longitudinal_offset_excess_m"),
+                )
+                self._append(
+                    "diagnostics/penalty_wheel_longitudinal_offset",
+                    reward_terms.get("wheel_longitudinal_offset_penalty"),
+                )
+                self._append(
+                    "diagnostics/straight_stance_gate",
+                    reward_terms.get("straight_stance_gate"),
                 )
 
         if self.num_timesteps - self._last_log_step >= self.log_interval_steps:

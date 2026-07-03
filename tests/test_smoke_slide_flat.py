@@ -13,19 +13,19 @@ if str(REPO_ROOT) not in sys.path:
 
 import mujoco
 from stable_baselines3.common.env_checker import check_env
-from stable_baselines3.common.monitor import Monitor
-
 from callbacks.slide_callbacks import build_slide_callbacks
 from common.run_manager import create_run, resolve_config_path, resolve_model_selection
-from envs.slide_flat_v1 import SlideFlatEnv, load_slide_config
+from common.vec_env import create_evaluation_vec_env, create_training_vec_env
+from envs.slide_flat_factory import create_slide_env, load_slide_config, slide_env_variant
 from rl.ppo import create_ppo_model, load_ppo_model
 
 
 def _smoke_config(tmp_path: Path) -> dict:
-    cfg = copy.deepcopy(load_slide_config(REPO_ROOT / "configs" / "slide_flat.yaml"))
+    cfg = copy.deepcopy(load_slide_config(REPO_ROOT / "configs" / "slide_flat_v2.yaml"))
     cfg["output"] = {"root_dir": str(tmp_path), "run_id": "pytest_smoke"}
     cfg["experiment"]["name"] = "pytest_smoke"
     cfg["training"]["total_timesteps"] = 512
+    cfg["training"]["n_envs"] = 1
     cfg["logging"]["log_interval_steps"] = 64
     cfg["ppo"].update(
         {
@@ -54,7 +54,7 @@ def test_slide_flat_smoke(tmp_path: Path) -> None:
     model = mujoco.MjModel.from_xml_path(str(xml_path))
     assert (model.nq, model.nv, model.nu) == (13, 12, 6)
 
-    env = SlideFlatEnv(cfg)
+    env = create_slide_env(cfg)
     obs, _ = env.reset(seed=seed)
     assert obs.shape == (28,)
     assert env.action_space.shape == (6,)
@@ -75,8 +75,13 @@ def test_slide_flat_smoke(tmp_path: Path) -> None:
     env.close()
 
     run_paths = create_run(cfg, run_id="pytest_smoke")
-    train_env = Monitor(SlideFlatEnv(cfg), filename=str(run_paths.tensorboard / "monitor.csv"))
-    eval_env = Monitor(SlideFlatEnv(cfg))
+    train_env = create_training_vec_env(
+        run_paths.config,
+        seed=seed,
+        n_envs=1,
+        monitor_path=run_paths.tensorboard / "monitor.csv",
+    )
+    eval_env = create_evaluation_vec_env(run_paths.config, seed=seed + 10000)
     ppo_model = create_ppo_model(train_env, cfg, tensorboard_log=run_paths.tensorboard)
     callbacks = build_slide_callbacks(cfg, eval_env=eval_env, run_paths=run_paths)
     ppo_model.learn(total_timesteps=512, callback=callbacks, tb_log_name=run_paths.run_dir.name)
@@ -95,13 +100,26 @@ def test_slide_flat_smoke(tmp_path: Path) -> None:
     assert run_paths.metadata.is_file()
 
     frozen_cfg = load_slide_config(run_paths.config)
-    frozen_env = SlideFlatEnv(frozen_cfg)
+    frozen_env = create_slide_env(frozen_cfg)
     loaded_model = load_ppo_model(final_zip, env=frozen_env, cfg=frozen_cfg)
     loaded_obs, _ = frozen_env.reset(seed=7)
     loaded_action, _ = loaded_model.predict(loaded_obs, deterministic=True)
     assert loaded_action.shape == (6,)
     assert np.isfinite(loaded_action).all()
     frozen_env.close()
+
+
+def test_slide_env_factory_selects_v1_and_v2() -> None:
+    for variant in ("v1", "v2"):
+        cfg = load_slide_config(REPO_ROOT / "configs" / f"slide_flat_{variant}.yaml")
+        assert slide_env_variant(cfg) == variant
+        env = create_slide_env(cfg)
+        try:
+            obs, _ = env.reset(seed=int(cfg["seed"]))
+            assert obs.shape == (28,)
+            assert np.isfinite(obs).all()
+        finally:
+            env.close()
 
 
 def test_run_manager_layout_and_collision(tmp_path: Path) -> None:

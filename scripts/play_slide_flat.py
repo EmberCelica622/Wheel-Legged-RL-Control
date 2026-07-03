@@ -13,7 +13,7 @@ import mujoco.viewer
 
 from common.reproducibility import seed_everything
 from common.run_manager import resolve_model_selection
-from envs.slide_flat_v2 import SlideFlatEnv, load_slide_config
+from envs.slide_flat_factory import create_slide_env, load_slide_config
 from rl.ppo import load_ppo_model
 
 
@@ -70,7 +70,7 @@ def main() -> None:
 
     seed = int(cfg.get("seed", 1))
     seed_everything(seed)
-    env = SlideFlatEnv(cfg)
+    env = create_slide_env(cfg)
     obs, _ = env.reset(seed=seed)
     model = load_ppo_model(selection.model, cfg=cfg)
     target_dt = env.control_dt / realtime_factor

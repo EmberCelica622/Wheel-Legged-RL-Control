@@ -2,7 +2,7 @@ seed: 42
 
 experiment:
   task: slide_flat
-  env_variant: v2
+  env_variant: v1
   name: ppo_pd_baseline
 
 output:
@@ -99,6 +99,9 @@ ppo:
 
 training:
   total_timesteps: 1000000
+  n_envs: 1
+  start_method: spawn
+  eval_seed_offset: 10000
 
 logging:
   log_interval_steps: 1000

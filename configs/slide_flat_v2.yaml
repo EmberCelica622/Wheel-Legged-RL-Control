@@ -97,7 +97,7 @@ termination:
 ppo:
   policy: MlpPolicy
   learning_rate: 0.0003
-  n_steps: 2048
+  n_steps: 256
   batch_size: 64
   n_epochs: 10
   gamma: 0.99
@@ -113,6 +113,9 @@ ppo:
 
 training:
   total_timesteps: 1000000
+  n_envs: 8
+  start_method: spawn
+  eval_seed_offset: 10000
 
 logging:
   log_interval_steps: 1000
