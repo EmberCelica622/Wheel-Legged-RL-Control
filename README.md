@@ -3,23 +3,44 @@
 ## Introduction
 This project is a simulation of a two-legged-wheeled robot based on a deep reinforcement learning approach. The simulator used is **MuJoco**. The specific approach is to firstly encapsulate the robot as a standard reinforcement learning Python interface according to the **gym** style, including state feedback, action, reward function, reset, etc. The robot is then used to interact with the mujoco model through the **Pytorch** framework. Secondly, the **SAC** algorithm is built through Pytorch framework to interact with the MuJoco model to make the robot reach the goal point.
 
-## Slide-flat PPO workflow
+## Slide Task PPO Workflow
 
-The maintained slide-flat PPO entry points live in `scripts/`. Commands below
-assume the repository's configured `drl` Conda environment.
+Maintained slide PPO entry points live in `scripts/`. Commands below assume the
+repository's configured `drl` Conda environment.
+
+Task environments use this canonical naming rule:
+
+```text
+<capability>_<condition>_<complexity>_v<version>[_legacy]
+```
+
+Current tasks:
+
+```text
+slide_fixed_velocity_flat_v1_legacy  historical fixed-velocity flat task without the wheel-offset stance regularizer
+slide_fixed_velocity_flat_v1         fixed-velocity flat task with the current stance regularizer
+slide_variable_velocity_flat_v2      variable per-episode forward-velocity flat task
+```
+
+`legacy` means a historical implementation kept for compatibility. `v1` and
+`v2` describe the environment/training capability stage in this project.
+Functional differences should be expressed through capability, condition, and
+complexity before the version label. Do not create ambiguous names such as
+`slide_flat_v3`; add the missing semantic component instead.
 
 Start a new run with an automatic id, or override its seed/run id:
 
 ```powershell
-python scripts/train_slide_flat.py --config configs/slide_flat.yaml
-python scripts/train_slide_flat.py --config configs/slide_flat.yaml --seed 0
-python scripts/train_slide_flat.py --config configs/slide_flat.yaml --run-id debug_seed0
+python scripts/train_task.py --config configs/slide_fixed_velocity_flat_v1.yaml
+python scripts/train_task.py --config configs/slide_variable_velocity_flat_v2.yaml
+python scripts/train_task.py --config configs/slide_fixed_velocity_flat_v1.yaml --seed 0
+python scripts/train_task.py --config configs/slide_fixed_velocity_flat_v1.yaml --run-id debug_seed0
 ```
 
-Every new run is self-contained:
+Every new run is self-contained under the canonical task id:
 
 ```text
-runs/slide_flat/v2/ppo_pd_baseline/20260630-153500_seed42/
+runs/slide_variable_velocity_flat_v2/ppo_pd_baseline/20260630-153500_seed42/
 |-- config.yaml
 |-- metadata.json
 |-- checkpoints/
@@ -39,23 +60,25 @@ runs/slide_flat/v2/ppo_pd_baseline/20260630-153500_seed42/
 Play or evaluate a frozen run configuration:
 
 ```powershell
-python scripts/play_slide_flat.py --run runs/slide_flat/v2/ppo_pd_baseline/<run_id>
-python scripts/play_slide_flat.py --model path/to/model.zip --config configs/slide_flat.yaml
-python scripts/evaluate_slide_flat.py --run runs/slide_flat/v2/ppo_pd_baseline/<run_id>
-python scripts/evaluate_slide_flat.py --model path/to/model.zip --config configs/slide_flat.yaml
+python scripts/play_task.py --run runs/slide_variable_velocity_flat_v2/ppo_pd_baseline/<run_id>
+python scripts/play_task.py --model path/to/model.zip --config configs/slide_variable_velocity_flat_v2.yaml
+python scripts/evaluate_task.py --run runs/slide_variable_velocity_flat_v2/ppo_pd_baseline/<run_id>
+python scripts/evaluate_task.py --model path/to/model.zip --config configs/slide_variable_velocity_flat_v2.yaml
 ```
 
 View TensorBoard data for one run and run the automated checks:
 
 ```powershell
-python -m tensorboard.main --logdir runs/slide_flat/v2/ppo_pd_baseline/<run_id>/logs/tensorboard
+python -m tensorboard.main --logdir runs/slide_variable_velocity_flat_v2/ppo_pd_baseline/<run_id>/logs/tensorboard
 python -m pytest tests/
 ```
 
-Root configs describe the experiment and output root. Training resolves all
-artifact paths, writes the exact config to the run directory, and refuses to
-overwrite an existing explicit run id. Existing legacy runs and checkpoints
-are not migrated or modified.
+Root configs describe the task metadata, experiment label, and output root.
+Training resolves all artifact paths, writes the exact config to the run
+directory, and refuses to overwrite an existing explicit run id. Deprecated
+`slide_flat_*` task names and old `runs/slide_flat/...` directories are kept as
+history only; new experiments use canonical task IDs and existing old runs are
+not migrated or modified.
 
 ## Environment Configuration
 The project was done on Ubuntu20.04 with the following Python versions and library versions:

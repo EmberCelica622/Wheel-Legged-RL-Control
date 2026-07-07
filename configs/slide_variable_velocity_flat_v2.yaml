@@ -1,8 +1,13 @@
 seed: 42
 
+task:
+  capability: slide
+  condition: variable_velocity
+  complexity: flat
+  version: v2
+  legacy: false
+
 experiment:
-  task: slide_flat
-  env_variant: v1
   name: ppo_pd_baseline
 
 output:
@@ -20,6 +25,8 @@ sim:
 
 robot:
   base_body: base
+  left_wheel_body: left_wheel
+  right_wheel_body: right_wheel
   stand_keyframe: stand
   base_linear_velocity_sensor: base_linear_velocity
   base_angular_velocity_sensor: base_angular_velocity
@@ -52,12 +59,14 @@ control:
   clip_joint_targets: true
 
 command:
-  forward_velocity: 0.8
-  yaw_rate: 0.0
+  forward_velocity:
+    mode: uniform_per_episode
+    range: [0.0, 2.0]
+  yaw_rate:
+    mode: fixed
+    value: 0.0
 
 observation:
-  # 28D including body-frame base linear velocity. Old 25D PPO checkpoints
-  # cannot be loaded into this environment.
   clip: 100.0
 
 reward:
@@ -74,6 +83,12 @@ reward:
     action_rate_penalty: 0.03
     joint_velocity_penalty: 0.001
     torque_penalty: 0.002
+    wheel_longitudinal_offset_penalty: 0.10
+  straight_stance:
+    enabled: true
+    free_longitudinal_offset_m: 0.02
+    longitudinal_offset_scale_m: 0.04
+    yaw_rate_threshold: 0.05
 
 termination:
   min_base_height: 0.25
@@ -83,7 +98,6 @@ termination:
 ppo:
   policy: MlpPolicy
   learning_rate: 0.0003
-  n_steps: 2048
   batch_size: 64
   n_epochs: 10
   gamma: 0.99
@@ -99,9 +113,11 @@ ppo:
 
 training:
   total_timesteps: 1000000
-  n_envs: 1
+  n_envs: 8
+  rollout_batch_size: 2048
   start_method: spawn
   eval_seed_offset: 10000
+  warm_start_checkpoint: null
 
 logging:
   log_interval_steps: 1000
@@ -113,5 +129,7 @@ callbacks:
   deterministic_eval: true
 
 play:
+  seed: 42
   deterministic: true
+  repeat_same_initial_state: false
   realtime_factor: 1.0

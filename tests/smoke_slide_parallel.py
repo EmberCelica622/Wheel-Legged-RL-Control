@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import copy
 import multiprocessing
 import sys
@@ -18,8 +19,8 @@ from tensorboard.backend.event_processing.event_accumulator import EventAccumula
 from callbacks.slide_callbacks import build_slide_callbacks
 from common.run_manager import create_run
 from common.vec_env import create_evaluation_vec_env, create_training_vec_env
-from envs.slide_flat_factory import create_slide_env, load_slide_config
-from rl.ppo import create_ppo_model, load_ppo_model
+from envs.slide_task_factory import create_slide_env, load_slide_config, slide_task_id
+from rl.ppo import create_ppo_model, warm_start_ppo_policy
 
 
 EXPECTED_DIAGNOSTICS = {
@@ -28,6 +29,8 @@ EXPECTED_DIAGNOSTICS = {
     "diagnostics/wheel_longitudinal_offset_excess_m",
     "diagnostics/penalty_wheel_longitudinal_offset",
     "diagnostics/straight_stance_gate",
+    "diagnostics/command_forward_velocity",
+    "diagnostics/command_yaw_rate",
 }
 
 
@@ -55,14 +58,27 @@ def run_random_rollout(cfg: dict, steps: int = 1000) -> None:
         env.close()
 
 
-def run_parallel_training_smoke(cfg: dict, output_root: Path) -> None:
+def run_parallel_training_smoke(
+    cfg: dict,
+    output_root: Path,
+    *,
+    n_envs: int,
+    timesteps: int,
+) -> None:
+    if timesteps < 64 or timesteps % n_envs != 0:
+        raise ValueError("Smoke timesteps must be at least 64 and divisible by n_envs")
     smoke_cfg = copy.deepcopy(cfg)
     smoke_cfg["output"] = {"root_dir": str(output_root), "run_id": "parallel_smoke"}
     smoke_cfg["experiment"]["name"] = "parallel_smoke"
-    smoke_cfg["training"].update({"total_timesteps": 1024, "n_envs": 8})
+    smoke_cfg["training"].update(
+        {
+            "total_timesteps": timesteps,
+            "n_envs": n_envs,
+            "rollout_batch_size": timesteps,
+        }
+    )
     smoke_cfg["ppo"].update(
         {
-            "n_steps": 128,
             "batch_size": 64,
             "n_epochs": 1,
             "verbose": 0,
@@ -72,8 +88,8 @@ def run_parallel_training_smoke(cfg: dict, output_root: Path) -> None:
     smoke_cfg["logging"]["log_interval_steps"] = 64
     smoke_cfg["callbacks"].update(
         {
-            "checkpoint_freq": 1024,
-            "eval_freq": 1024,
+            "checkpoint_freq": timesteps,
+            "eval_freq": timesteps,
             "n_eval_episodes": 1,
             "deterministic_eval": True,
         }
@@ -82,10 +98,15 @@ def run_parallel_training_smoke(cfg: dict, output_root: Path) -> None:
     run_paths = create_run(smoke_cfg, run_id="parallel_smoke")
     seed = int(smoke_cfg["seed"])
 
-    single_cfg = copy.deepcopy(smoke_cfg)
-    single_cfg["training"]["n_envs"] = 1
-    single_cfg["ppo"]["n_steps"] = 2048
-    single_env = create_training_vec_env(run_paths.config, seed=seed, n_envs=1)
+    # Build a genuine v1 checkpoint, then policy-only warm-start the selected
+    # target task. With the default v2 target this exercises the v1 -> v2 path.
+    single_cfg = load_slide_config(REPO_ROOT / "configs" / "slide_fixed_velocity_flat_v1.yaml")
+    single_cfg["output"] = {"root_dir": str(output_root), "run_id": "v1_source"}
+    single_cfg["experiment"]["name"] = "warm_start_source"
+    single_cfg["training"].update({"n_envs": 1, "rollout_batch_size": 2048})
+    single_cfg["ppo"].update(copy.deepcopy(smoke_cfg["ppo"]))
+    source_paths = create_run(single_cfg, run_id="v1_source")
+    single_env = create_training_vec_env(source_paths.config, seed=seed, n_envs=1)
     try:
         single_model = create_ppo_model(single_env, single_cfg)
         single_checkpoint = run_paths.models / "single_env_checkpoint"
@@ -96,35 +117,37 @@ def run_parallel_training_smoke(cfg: dict, output_root: Path) -> None:
     train_env = create_training_vec_env(
         run_paths.config,
         seed=seed,
-        n_envs=8,
+        n_envs=n_envs,
         start_method="spawn",
         monitor_path=run_paths.tensorboard / "monitor.csv",
     )
     eval_env = create_evaluation_vec_env(run_paths.config, seed=seed + 10000)
     try:
-        assert train_env.num_envs == 8
-        assert train_env.get_attr("render_mode") == [None] * 8
+        assert train_env.num_envs == n_envs
+        assert train_env.get_attr("render_mode") == [None] * n_envs
         initial_obs = train_env.reset()
-        assert initial_obs.shape == (8, 28)
+        assert initial_obs.shape == (n_envs, 28)
         assert np.isfinite(initial_obs).all()
-        assert len({row.tobytes() for row in initial_obs}) == 8
-        model = load_ppo_model(
-            single_checkpoint.with_suffix(".zip"),
-            env=train_env,
-            cfg=smoke_cfg,
-            tensorboard_log=run_paths.tensorboard,
-            override_ppo_config=True,
-        )
-        assert model.n_envs == 8
-        assert model.n_steps == 128
+        assert len({row.tobytes() for row in initial_obs}) == n_envs
+        if slide_task_id(smoke_cfg) == "slide_variable_velocity_flat_v2":
+            assert len({float(value) for value in initial_obs[:, 9]}) == n_envs
+        else:
+            assert np.allclose(initial_obs[:, 9:11], [0.8, 0.0])
+        model = create_ppo_model(train_env, smoke_cfg, tensorboard_log=run_paths.tensorboard)
+        source = warm_start_ppo_policy(model, single_checkpoint.with_suffix(".zip"), device="cpu")
+        for name, value in model.policy.state_dict().items():
+            assert np.array_equal(value.detach().cpu().numpy(), source.policy.state_dict()[name].detach().cpu().numpy())
+        assert not model.policy.optimizer.state
+        assert model.n_envs == n_envs
+        assert model.n_steps == timesteps // n_envs
         assert model.batch_size == 64
         callbacks = build_slide_callbacks(
             smoke_cfg,
             eval_env=eval_env,
             run_paths=run_paths,
-            n_envs=8,
+            n_envs=n_envs,
         )
-        model.learn(total_timesteps=1024, callback=callbacks, tb_log_name="parallel_smoke")
+        model.learn(total_timesteps=timesteps, callback=callbacks, tb_log_name="parallel_smoke")
         model.save(str(run_paths.models / "final_model"))
     finally:
         train_env.close()
@@ -144,15 +167,33 @@ def run_parallel_training_smoke(cfg: dict, output_root: Path) -> None:
     assert not missing, f"Missing TensorBoard diagnostics: {sorted(missing)}"
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Headless slide task vector smoke test.")
+    parser.add_argument(
+        "--config",
+        default=str(REPO_ROOT / "configs" / "slide_variable_velocity_flat_v2.yaml"),
+    )
+    parser.add_argument("--timesteps", type=int, default=1024)
+    parser.add_argument("--n-envs", type=int, default=8)
+    parser.add_argument("--random-steps", type=int, default=1000)
+    return parser.parse_args()
+
+
 def main() -> None:
     multiprocessing.freeze_support()
-    cfg = load_slide_config(REPO_ROOT / "configs" / "slide_flat_v2.yaml")
-    run_random_rollout(cfg)
-    print("v2 check_env and 1000-step random rollout passed")
+    args = parse_args()
+    cfg = load_slide_config(args.config)
+    run_random_rollout(cfg, steps=args.random_steps)
+    print(f"check_env and {args.random_steps}-step random rollout passed")
 
     with tempfile.TemporaryDirectory(prefix="slide_parallel_smoke_") as temp_dir:
-        run_parallel_training_smoke(cfg, Path(temp_dir))
-    print("8-worker spawn PPO, checkpoint, eval, and TensorBoard smoke passed")
+        run_parallel_training_smoke(
+            cfg,
+            Path(temp_dir),
+            n_envs=args.n_envs,
+            timesteps=args.timesteps,
+        )
+    print(f"{args.n_envs}-worker spawn PPO, warm-start, checkpoint, eval, and TensorBoard smoke passed")
 
 
 if __name__ == "__main__":

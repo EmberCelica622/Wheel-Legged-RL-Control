@@ -15,13 +15,16 @@ if str(REPO_ROOT) not in sys.path:
 
 from common.reproducibility import seed_everything
 from common.vec_env import create_training_vec_env
-from envs.slide_flat_factory import load_slide_config
+from envs.slide_task_factory import load_slide_config
 from rl.ppo import create_ppo_model
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Benchmark slide-flat vector sampling and short PPO training.")
-    parser.add_argument("--config", default=str(REPO_ROOT / "configs" / "slide_flat_v2.yaml"))
+    parser = argparse.ArgumentParser(description="Benchmark slide task vector sampling and short PPO training.")
+    parser.add_argument(
+        "--config",
+        default=str(REPO_ROOT / "configs" / "slide_variable_velocity_flat_v2.yaml"),
+    )
     parser.add_argument("--n-envs", type=int, nargs="+", default=[1, 4, 8])
     parser.add_argument("--sample-transitions", type=int, default=8192)
     parser.add_argument("--warmup-transitions", type=int, default=1024)
@@ -72,7 +75,7 @@ def main() -> None:
             sample_fps = sampled_transitions / max(sample_seconds, 1e-9)
 
             cfg = copy.deepcopy(base_cfg)
-            cfg["ppo"]["n_steps"] = args.rollout_size // n_envs
+            cfg["training"]["rollout_batch_size"] = args.rollout_size
             cfg["ppo"]["n_epochs"] = int(args.n_epochs)
             model = create_ppo_model(env, cfg)
             train_begin = time.perf_counter()

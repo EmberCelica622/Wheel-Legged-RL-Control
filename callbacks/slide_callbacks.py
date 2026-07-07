@@ -12,6 +12,7 @@ from stable_baselines3.common.callbacks import (
 )
 
 from common.run_manager import RunPaths
+from common.task_identity import canonical_task_id_from_config
 
 
 class SlideDiagnosticsCallback(BaseCallback):
@@ -46,6 +47,11 @@ class SlideDiagnosticsCallback(BaseCallback):
                 info.get("mean_leg_joint_velocity"),
             )
             self._append("diagnostics/terminated_rate", float(info.get("terminated", False)))
+            self._append(
+                "diagnostics/command_forward_velocity",
+                info.get("command_forward_velocity"),
+            )
+            self._append("diagnostics/command_yaw_rate", info.get("command_yaw_rate"))
             self._append(
                 "diagnostics/wheel_longitudinal_offset",
                 info.get("wheel_longitudinal_offset"),
@@ -104,6 +110,7 @@ def build_slide_callbacks(
     """Build callbacks whose artifacts stay inside one run directory."""
     logging_cfg = cfg.get("logging", {})
     callback_cfg = cfg.get("callbacks", {})
+    task_id = canonical_task_id_from_config(cfg)
 
     divisor = max(int(n_envs), 1)
     checkpoint_freq = max(int(callback_cfg.get("checkpoint_freq", 50000)) // divisor, 1)
@@ -114,7 +121,7 @@ def build_slide_callbacks(
         CheckpointCallback(
             save_freq=checkpoint_freq,
             save_path=str(run_paths.checkpoints),
-            name_prefix="ppo",
+            name_prefix=task_id,
             save_replay_buffer=False,
             save_vecnormalize=False,
         ),

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from stable_baselines3 import PPO
+from stable_baselines3.common.utils import check_for_correct_spaces
 
 
 PPO_KWARGS = {
@@ -27,6 +28,36 @@ PPO_KWARGS = {
     "verbose",
     "device",
 }
+
+
+def resolve_ppo_rollout_config(cfg: dict[str, Any], n_envs: int) -> dict[str, int]:
+    """Resolve per-environment n_steps from a target aggregate rollout size."""
+    n_envs = int(n_envs)
+    if n_envs < 1:
+        raise ValueError("training.n_envs must be positive")
+
+    training_cfg = cfg.get("training", {})
+    ppo_cfg = cfg.setdefault("ppo", {})
+    target_rollout = training_cfg.get("rollout_batch_size")
+    if target_rollout is None:
+        if "n_steps" not in ppo_cfg:
+            raise ValueError("Set training.rollout_batch_size or legacy ppo.n_steps")
+        target_rollout = int(ppo_cfg["n_steps"]) * n_envs
+    target_rollout = int(target_rollout)
+    if target_rollout < 1 or target_rollout % n_envs != 0:
+        raise ValueError(
+            f"training.rollout_batch_size ({target_rollout}) must be positive and divisible "
+            f"by n_envs ({n_envs})"
+        )
+
+    ppo_cfg["n_steps"] = target_rollout // n_envs
+    validate_ppo_rollout_config(cfg, n_envs)
+    return {
+        "n_envs": n_envs,
+        "n_steps": int(ppo_cfg["n_steps"]),
+        "rollout_batch_size": target_rollout,
+        "batch_size": int(ppo_cfg.get("batch_size", 64)),
+    }
 
 
 def validate_ppo_rollout_config(cfg: dict[str, Any], n_envs: int) -> None:
@@ -68,7 +99,7 @@ def create_ppo_model(
     tensorboard_log: str | Path | None = None,
 ) -> PPO:
     """Create a Stable-Baselines3 PPO model from the YAML config."""
-    validate_ppo_rollout_config(cfg, int(getattr(env, "num_envs", 1)))
+    resolve_ppo_rollout_config(cfg, int(getattr(env, "num_envs", 1)))
     policy = cfg.get("ppo", {}).get("policy", "MlpPolicy")
     kwargs = _ppo_kwargs_from_cfg(cfg, tensorboard_log=tensorboard_log)
     return PPO(policy, env, **kwargs)
@@ -91,7 +122,7 @@ def load_ppo_model(
             load_kwargs["device"] = device
         if override_ppo_config:
             n_envs = int(getattr(env, "num_envs", 1))
-            validate_ppo_rollout_config(cfg, n_envs)
+            resolve_ppo_rollout_config(cfg, n_envs)
             ppo_cfg = cfg.get("ppo", {})
             load_kwargs["n_steps"] = int(ppo_cfg.get("n_steps", 2048))
             load_kwargs["batch_size"] = int(ppo_cfg.get("batch_size", 64))
@@ -99,6 +130,17 @@ def load_ppo_model(
     if tensorboard_log is not None:
         load_kwargs["tensorboard_log"] = str(Path(tensorboard_log).expanduser().resolve())
     return PPO.load(str(path), **load_kwargs)
+
+
+def warm_start_ppo_policy(model: PPO, checkpoint: str | Path, device: str = "auto") -> PPO:
+    """Copy policy weights from a checkpoint without copying optimizer state."""
+    source = PPO.load(str(checkpoint), device=device)
+    env = model.get_env()
+    if env is None:
+        raise ValueError("Warm-start target model must have an environment")
+    check_for_correct_spaces(env, source.observation_space, source.action_space)
+    model.policy.load_state_dict(source.policy.state_dict(), strict=True)
+    return source
 
 
 class PPOTrainer:
@@ -142,6 +184,7 @@ class PPOTrainer:
         total_timesteps: int | None = None,
         callback: Any | None = None,
         tb_log_name: str = "PPO",
+        reset_num_timesteps: bool = True,
     ) -> PPO:
         if total_timesteps is None:
             total_timesteps = int(self.cfg.get("training", {}).get("total_timesteps", 1000000))
@@ -149,6 +192,7 @@ class PPOTrainer:
             total_timesteps=int(total_timesteps),
             callback=callback,
             tb_log_name=tb_log_name,
+            reset_num_timesteps=reset_num_timesteps,
         )
         return self.model
 

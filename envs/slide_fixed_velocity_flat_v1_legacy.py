@@ -103,19 +103,6 @@ class SlideFlatEnv(gym.Env):
             robot_cfg.get("base_body", "base"),
         )
 
-        # v2 加入轮子位置查询  +++++++++++++++++
-        self.left_wheel_body_id = self._required_id(
-            mujoco.mjtObj.mjOBJ_BODY,
-            robot_cfg["left_wheel_body"],
-        )
-        self.right_wheel_body_id = self._required_id(
-            mujoco.mjtObj.mjOBJ_BODY,
-            robot_cfg["right_wheel_body"],
-        )
-
-        
-        # v2  -----------------
-
         self.leg_joint_names = robot_cfg.get(
             "leg_joints",
             ["left_hip_pitch", "left_knee_pitch", "right_hip_pitch", "right_knee_pitch"],
@@ -178,22 +165,6 @@ class SlideFlatEnv(gym.Env):
         self.reward_cfg = self.cfg.get("reward", {})
         self.reward_weights = self.reward_cfg.get("weights", {})
         self.termination_cfg = self.cfg.get("termination", {})
-
-        # v2: stance regularization
-        stance_cfg = self.reward_cfg.get("straight_stance", {})
-        self.stance_regularization_enabled = bool(stance_cfg.get("enabled", False))
-        self.stance_free_offset_m = float(
-            stance_cfg.get("free_longitudinal_offset_m", 0.02)
-        )
-        self.stance_offset_scale_m = float(
-            stance_cfg.get("longitudinal_offset_scale_m", 0.04)
-        )
-        self.stance_yaw_rate_threshold = float(
-            stance_cfg.get("yaw_rate_threshold", 0.05)
-        )
-        # 加入 stance_offset_scale_m 的正数检查
-        if self.stance_offset_scale_m <= 0.0:
-            raise ValueError("longitudinal_offset_scale_m must be positive.")
 
         obs_clip = float(self.cfg.get("observation", {}).get("clip", 100.0))
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32)
@@ -361,18 +332,6 @@ class SlideFlatEnv(gym.Env):
 
     def _wheel_vel(self) -> np.ndarray:
         return self.data.qvel[self.wheel_qvel_addr].copy()
-    
-    # v2
-    def _wheel_longitudinal_offset(self) -> float:
-        """Signed left-right wheel offset along the base-frame forward axis."""
-        p_left_world = self.data.xpos[self.left_wheel_body_id]
-        p_right_world = self.data.xpos[self.right_wheel_body_id]
-
-        delta_world = p_left_world - p_right_world
-        delta_body = self._base_rotmat().T @ delta_world
-
-        # body x-axis is the same forward direction used by vx command tracking.
-        return float(delta_body[0])
 
     def _action_to_targets(self, action: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         # Policy action[0:4] is a normalized offset around the nominal stand
@@ -448,22 +407,6 @@ class SlideFlatEnv(gym.Env):
             ]
         )
 
-        wheel_longitudinal_offset = self._wheel_longitudinal_offset()
-
-        straight_gate = float(
-            self.stance_regularization_enabled
-            and abs(self.command[1]) <= self.stance_yaw_rate_threshold
-        )
-
-        offset_excess_m = max(
-            abs(wheel_longitudinal_offset) - self.stance_free_offset_m,
-            0.0,
-        )
-
-        wheel_longitudinal_offset_penalty = straight_gate * (
-            offset_excess_m / self.stance_offset_scale_m
-        ) ** 2
-
         terms = {
             "forward_velocity_tracking": math.exp(-(forward_error**2) / max(tracking_sigma**2, 1e-6)),
             "yaw_rate_tracking": math.exp(-(yaw_error**2) / max(yaw_sigma**2, 1e-6)),
@@ -473,10 +416,6 @@ class SlideFlatEnv(gym.Env):
             "action_rate_penalty": float(np.mean((action - old_action) ** 2)),
             "joint_velocity_penalty": float(np.mean(self._leg_vel() ** 2)),
             "torque_penalty": float(np.mean(all_torque**2)),
-            "wheel_longitudinal_offset_abs_m": abs(wheel_longitudinal_offset),
-            "wheel_longitudinal_offset_excess_m": offset_excess_m,
-            "wheel_longitudinal_offset_penalty": wheel_longitudinal_offset_penalty,
-            "straight_stance_gate": straight_gate,
         }
 
         weights = self.reward_weights
@@ -489,7 +428,6 @@ class SlideFlatEnv(gym.Env):
             - float(weights.get("action_rate_penalty", 0.03)) * terms["action_rate_penalty"]
             - float(weights.get("joint_velocity_penalty", 0.001)) * terms["joint_velocity_penalty"]
             - float(weights.get("torque_penalty", 0.002)) * terms["torque_penalty"]
-            - float(weights.get("wheel_longitudinal_offset_penalty", 0.0)) * terms["wheel_longitudinal_offset_penalty"]
         )
 
         return float(reward), {key: float(value) for key, value in terms.items()}
@@ -527,5 +465,9 @@ class SlideFlatEnv(gym.Env):
             "tau_leg": self.last_leg_torque.copy(),
             "tau_wheel": self.last_wheel_torque.copy(),
             "mean_leg_joint_velocity": float(np.mean(np.abs(self._leg_vel()))),
-            "wheel_longitudinal_offset": self._wheel_longitudinal_offset(),
+            "command_forward_velocity": float(self.command[0]),
+            "command_yaw_rate": float(self.command[1]),
         }
+
+
+SlideFixedVelocityFlatV1LegacyEnv = SlideFlatEnv

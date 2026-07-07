@@ -13,6 +13,8 @@ from typing import Any
 
 import yaml
 
+from common.task_identity import canonical_task_id_from_config, normalize_task_config
+
 
 _UNSAFE_COMPONENT = re.compile(r"[^\w.-]+", flags=re.UNICODE)
 
@@ -122,15 +124,14 @@ def _resolved_config(
     output_root: Path,
     run_id: str,
     seed: int,
-    task: str,
-    env_variant: str,
     experiment_name: str,
 ) -> dict[str, Any]:
-    resolved = copy.deepcopy({key: value for key, value in cfg.items() if not key.startswith("_")})
-    resolved["seed"] = seed
-    resolved.setdefault("experiment", {}).update(
-        {"task": task, "env_variant": env_variant, "name": experiment_name}
+    resolved = normalize_task_config(
+        copy.deepcopy({key: value for key, value in cfg.items() if not key.startswith("_")})
     )
+    resolved.pop("_task_id", None)
+    resolved["seed"] = seed
+    resolved.setdefault("experiment", {})["name"] = experiment_name
     resolved.setdefault("output", {}).update(
         {"root_dir": str(output_root), "run_id": run_id}
     )
@@ -150,19 +151,19 @@ def create_run(
     run_id: str | None = None,
     now: datetime | None = None,
 ) -> RunPaths:
-    seed = int(cfg.get("seed", 1))
-    experiment = cfg.get("experiment", {})
-    output = cfg.get("output", {})
-    task = sanitize_component(experiment.get("task", "slide_flat"), "experiment.task")
-    env_variant = sanitize_component(experiment.get("env_variant", "v1"), "experiment.env_variant")
+    normalized_cfg = normalize_task_config(cfg)
+    seed = int(normalized_cfg.get("seed", 1))
+    experiment = normalized_cfg.get("experiment", {})
+    output = normalized_cfg.get("output", {})
+    task_id = sanitize_component(canonical_task_id_from_config(normalized_cfg), "task")
     experiment_name = sanitize_component(experiment.get("name", "ppo"), "experiment.name")
 
-    base_dir = Path(cfg.get("_base_dir", Path.cwd())).expanduser().resolve()
+    base_dir = Path(normalized_cfg.get("_base_dir", Path.cwd())).expanduser().resolve()
     output_root = Path(output.get("root_dir", "runs")).expanduser()
     if not output_root.is_absolute():
         output_root = base_dir / output_root
     output_root = output_root.resolve()
-    run_parent = output_root / task / env_variant / experiment_name
+    run_parent = output_root / task_id / experiment_name
 
     requested_id = run_id if run_id is not None else output.get("run_id", "auto")
     if requested_id in {None, "", "auto"}:
@@ -191,13 +192,11 @@ def create_run(
         directory.mkdir(parents=True, exist_ok=False)
 
     resolved_cfg = _resolved_config(
-        cfg,
+        normalized_cfg,
         base_dir=base_dir,
         output_root=output_root,
         run_id=actual_run_id,
         seed=seed,
-        task=task,
-        env_variant=env_variant,
         experiment_name=experiment_name,
     )
     with paths.config.open("w", encoding="utf-8") as stream:
@@ -207,11 +206,16 @@ def create_run(
     metadata = {
         "created_at": created_at,
         "seed": seed,
+        "task_id": task_id,
+        "initialization": str(normalized_cfg.get("training", {}).get("initialization", "scratch")),
         "python_version": platform.python_version(),
         "torch_version": _distribution_version("torch"),
         "mujoco_version": _distribution_version("mujoco"),
         "stable_baselines3_version": _distribution_version("stable-baselines3"),
     }
+    warm_start_checkpoint = normalized_cfg.get("training", {}).get("warm_start_checkpoint")
+    if warm_start_checkpoint:
+        metadata["warm_start_checkpoint"] = str(warm_start_checkpoint)
     commit = _git_commit(base_dir)
     if commit:
         metadata["git_commit"] = commit

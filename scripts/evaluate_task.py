@@ -17,12 +17,17 @@ from stable_baselines3.common.monitor import Monitor
 
 from common.reproducibility import seed_everything
 from common.run_manager import resolve_model_selection
-from envs.slide_flat_factory import create_slide_env, load_slide_config
+from envs.slide_task_factory import (
+    FixedCommandResetWrapper,
+    create_slide_env,
+    load_slide_config,
+    slide_task_id,
+)
 from rl.ppo import load_ppo_model
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate a slide-flat PPO model without rendering.")
+    parser = argparse.ArgumentParser(description="Evaluate a slide task PPO model without rendering.")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--run", help="Run directory containing config.yaml and models/.")
     source.add_argument("--model", help="PPO model .zip path; requires --config.")
@@ -30,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-kind", choices=("best", "final"), default="final")
     parser.add_argument("--episodes", type=int, default=5)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--command-vx", type=float, default=None)
     parser.add_argument("--deterministic", dest="deterministic", action="store_true", default=True)
     parser.add_argument("--stochastic", dest="deterministic", action="store_false")
     return parser.parse_args()
@@ -48,9 +54,13 @@ def main() -> None:
         raise SystemExit(f"Unable to resolve evaluation input: {exc}") from exc
 
     cfg = load_slide_config(selection.config)
+    task_id = slide_task_id(cfg)
     seed = int(args.seed if args.seed is not None else cfg.get("seed", 1))
     seed_everything(seed)
-    env = Monitor(create_slide_env(cfg))
+    base_env = create_slide_env(cfg)
+    if args.command_vx is not None:
+        base_env = FixedCommandResetWrapper(base_env, [float(args.command_vx), 0.0])
+    env = Monitor(base_env)
     env.reset(seed=seed)
     model = load_ppo_model(selection.model, env=env, cfg=cfg)
     try:
@@ -70,6 +80,7 @@ def main() -> None:
         "evaluated_at": datetime.now().astimezone().isoformat(),
         "model": str(selection.model),
         "config": str(selection.config),
+        "task": task_id,
         "seed": seed,
         "deterministic": bool(args.deterministic),
         "episodes": len(rewards),
@@ -82,6 +93,7 @@ def main() -> None:
         json.dump(metrics, stream, indent=2, sort_keys=True)
         stream.write("\n")
     print(f"Mean reward: {metrics['mean_reward']:.3f} +/- {metrics['std_reward']:.3f}")
+    print(f"Task: {task_id}")
     print(f"Evaluation metrics: {metrics_path}")
 
 

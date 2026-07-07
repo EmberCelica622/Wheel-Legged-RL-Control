@@ -10,12 +10,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from common.vec_env import create_training_vec_env
-from envs.slide_flat_factory import load_slide_config
-from rl.ppo import validate_ppo_rollout_config
+from envs.slide_task_factory import load_slide_config
+from rl.ppo import resolve_ppo_rollout_config
 
 
 def test_spawn_vec_env_has_independent_finite_workers() -> None:
-    config_path = REPO_ROOT / "configs" / "slide_flat_v2.yaml"
+    config_path = REPO_ROOT / "configs" / "slide_variable_velocity_flat_v2.yaml"
     env = create_training_vec_env(
         config_path,
         seed=123,
@@ -41,8 +41,8 @@ def test_spawn_vec_env_has_independent_finite_workers() -> None:
 
 
 def test_parallel_ppo_rollout_sizes_match() -> None:
-    cfg = load_slide_config(REPO_ROOT / "configs" / "slide_flat_v2.yaml")
-    for n_envs, n_steps in ((1, 2048), (4, 512), (8, 256)):
-        cfg["ppo"]["n_steps"] = n_steps
-        validate_ppo_rollout_config(cfg, n_envs)
-        assert n_envs * n_steps == 2048
+    cfg = load_slide_config(REPO_ROOT / "configs" / "slide_variable_velocity_flat_v2.yaml")
+    for n_envs, expected_n_steps in ((1, 2048), (4, 512), (8, 256)):
+        resolved = resolve_ppo_rollout_config(cfg, n_envs)
+        assert resolved["n_steps"] == expected_n_steps
+        assert resolved["rollout_batch_size"] == 2048

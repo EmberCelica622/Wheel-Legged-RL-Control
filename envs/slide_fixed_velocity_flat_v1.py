@@ -35,6 +35,18 @@ def _as_array(value: Any, length: int, name: str) -> np.ndarray:
     return arr.astype(np.float64)
 
 
+def _initial_command_value(spec: Any, default: float) -> float:
+    """Read both legacy scalar commands and the versioned command schema."""
+    if not isinstance(spec, dict):
+        return float(spec)
+    if "value" in spec:
+        return float(spec["value"])
+    value_range = np.asarray(spec.get("range", []), dtype=np.float64)
+    if value_range.shape == (2,):
+        return float(np.mean(value_range))
+    return float(default)
+
+
 def _quat_wxyz_to_rotmat(quat: np.ndarray) -> np.ndarray:
     q = np.asarray(quat, dtype=np.float64)
     norm = np.linalg.norm(q)
@@ -103,6 +115,15 @@ class SlideFlatEnv(gym.Env):
             robot_cfg.get("base_body", "base"),
         )
 
+        self.left_wheel_body_id = self._required_id(
+            mujoco.mjtObj.mjOBJ_BODY,
+            robot_cfg.get("left_wheel_body", "left_wheel"),
+        )
+        self.right_wheel_body_id = self._required_id(
+            mujoco.mjtObj.mjOBJ_BODY,
+            robot_cfg.get("right_wheel_body", "right_wheel"),
+        )
+
         self.leg_joint_names = robot_cfg.get(
             "leg_joints",
             ["left_hip_pitch", "left_knee_pitch", "right_hip_pitch", "right_knee_pitch"],
@@ -154,21 +175,38 @@ class SlideFlatEnv(gym.Env):
         )
 
         command_cfg = self.cfg.get("command", {})
-        self.command = np.array(
+        self.command_cfg = copy.deepcopy(command_cfg)
+        self.default_command = np.array(
             [
-                float(command_cfg.get("forward_velocity", 0.8)),
-                float(command_cfg.get("yaw_rate", 0.0)),
+                _initial_command_value(command_cfg.get("forward_velocity", 0.8), 0.8),
+                _initial_command_value(command_cfg.get("yaw_rate", 0.0), 0.0),
             ],
             dtype=np.float64,
         )
+        self.command = self.default_command.copy()
 
         self.reward_cfg = self.cfg.get("reward", {})
         self.reward_weights = self.reward_cfg.get("weights", {})
         self.termination_cfg = self.cfg.get("termination", {})
 
+        # Straight-stance regularization is part of the v1 base task.
+        stance_cfg = self.reward_cfg.get("straight_stance", {})
+        self.stance_regularization_enabled = bool(stance_cfg.get("enabled", False))
+        self.stance_free_offset_m = float(
+            stance_cfg.get("free_longitudinal_offset_m", 0.02)
+        )
+        self.stance_offset_scale_m = float(
+            stance_cfg.get("longitudinal_offset_scale_m", 0.04)
+        )
+        self.stance_yaw_rate_threshold = float(
+            stance_cfg.get("yaw_rate_threshold", 0.05)
+        )
+        if self.stance_offset_scale_m <= 0.0:
+            raise ValueError("longitudinal_offset_scale_m must be positive.")
+
         obs_clip = float(self.cfg.get("observation", {}).get("clip", 100.0))
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32)
-        # Observation v2 is 28D. PPO checkpoints trained with the previous
+        # The current observation schema is 28D. Checkpoints trained with the
         # 25D observation schema are intentionally incompatible.
         self.observation_space = spaces.Box(low=-obs_clip, high=obs_clip, shape=(28,), dtype=np.float32)
 
@@ -187,6 +225,23 @@ class SlideFlatEnv(gym.Env):
     def control_dt(self) -> float:
         return float(self.model.opt.timestep * self.control_decimation)
 
+    def _command_override(self, options: dict[str, Any] | None) -> np.ndarray | None:
+        if not options or "command" not in options:
+            return None
+        command = np.asarray(options["command"], dtype=np.float64)
+        if command.shape != (2,) or not np.isfinite(command).all():
+            raise ValueError("reset options.command must contain two finite values [vx, yaw_rate]")
+        if command[0] < 0.0:
+            raise ValueError("reset options.command forward velocity must be non-negative")
+        if not np.isclose(command[1], 0.0, atol=1e-12):
+            raise ValueError("slide-flat currently requires reset options.command yaw_rate to be 0")
+        return command
+
+    def _reset_command(self, options: dict[str, Any] | None) -> None:
+        """Set the command before reset constructs the first observation."""
+        override = self._command_override(options)
+        self.command[:] = self.default_command if override is None else override
+
     def reset(
         self,
         *,
@@ -194,6 +249,7 @@ class SlideFlatEnv(gym.Env):
         options: dict[str, Any] | None = None,
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
+        self._reset_command(options)
 
         self.episode_step = 0
         self.prev_action[:] = 0.0
@@ -333,6 +389,17 @@ class SlideFlatEnv(gym.Env):
     def _wheel_vel(self) -> np.ndarray:
         return self.data.qvel[self.wheel_qvel_addr].copy()
 
+    def _wheel_longitudinal_offset(self) -> float:
+        """Signed left-right wheel offset along the base-frame forward axis."""
+        p_left_world = self.data.xpos[self.left_wheel_body_id]
+        p_right_world = self.data.xpos[self.right_wheel_body_id]
+
+        delta_world = p_left_world - p_right_world
+        delta_body = self._base_rotmat().T @ delta_world
+
+        # body x-axis is the same forward direction used by vx command tracking.
+        return float(delta_body[0])
+
     def _action_to_targets(self, action: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         # Policy action[0:4] is a normalized offset around the nominal stand
         # pose. The target remains fixed for the full control interval.
@@ -407,6 +474,22 @@ class SlideFlatEnv(gym.Env):
             ]
         )
 
+        wheel_longitudinal_offset = self._wheel_longitudinal_offset()
+
+        straight_gate = float(
+            self.stance_regularization_enabled
+            and abs(self.command[1]) <= self.stance_yaw_rate_threshold
+        )
+
+        offset_excess_m = max(
+            abs(wheel_longitudinal_offset) - self.stance_free_offset_m,
+            0.0,
+        )
+
+        wheel_longitudinal_offset_penalty = straight_gate * (
+            offset_excess_m / self.stance_offset_scale_m
+        ) ** 2
+
         terms = {
             "forward_velocity_tracking": math.exp(-(forward_error**2) / max(tracking_sigma**2, 1e-6)),
             "yaw_rate_tracking": math.exp(-(yaw_error**2) / max(yaw_sigma**2, 1e-6)),
@@ -416,6 +499,10 @@ class SlideFlatEnv(gym.Env):
             "action_rate_penalty": float(np.mean((action - old_action) ** 2)),
             "joint_velocity_penalty": float(np.mean(self._leg_vel() ** 2)),
             "torque_penalty": float(np.mean(all_torque**2)),
+            "wheel_longitudinal_offset_abs_m": abs(wheel_longitudinal_offset),
+            "wheel_longitudinal_offset_excess_m": offset_excess_m,
+            "wheel_longitudinal_offset_penalty": wheel_longitudinal_offset_penalty,
+            "straight_stance_gate": straight_gate,
         }
 
         weights = self.reward_weights
@@ -428,6 +515,7 @@ class SlideFlatEnv(gym.Env):
             - float(weights.get("action_rate_penalty", 0.03)) * terms["action_rate_penalty"]
             - float(weights.get("joint_velocity_penalty", 0.001)) * terms["joint_velocity_penalty"]
             - float(weights.get("torque_penalty", 0.002)) * terms["torque_penalty"]
+            - float(weights.get("wheel_longitudinal_offset_penalty", 0.0)) * terms["wheel_longitudinal_offset_penalty"]
         )
 
         return float(reward), {key: float(value) for key, value in terms.items()}
@@ -465,4 +553,11 @@ class SlideFlatEnv(gym.Env):
             "tau_leg": self.last_leg_torque.copy(),
             "tau_wheel": self.last_wheel_torque.copy(),
             "mean_leg_joint_velocity": float(np.mean(np.abs(self._leg_vel()))),
+            "wheel_longitudinal_offset": self._wheel_longitudinal_offset(),
+            "command_forward_velocity": float(self.command[0]),
+            "command_yaw_rate": float(self.command[1]),
         }
+
+
+SlideFixedVelocityFlatV1Env = SlideFlatEnv
+SlideFlatV1Env = SlideFlatEnv

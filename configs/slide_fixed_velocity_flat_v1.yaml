@@ -1,9 +1,14 @@
 seed: 42
 
+task:
+  capability: slide
+  condition: fixed_velocity
+  complexity: flat
+  version: v1
+  legacy: false
+
 experiment:
-  task: slide_flat
-  env_variant: v2
-  name: wheel_longitudinal_offset
+  name: ppo_pd_baseline
 
 output:
   root_dir: runs
@@ -20,7 +25,6 @@ sim:
 
 robot:
   base_body: base
-  # v2 新增了两个轮子 body 的定义，方便在 reward 中使用
   left_wheel_body: left_wheel
   right_wheel_body: right_wheel
   stand_keyframe: stand
@@ -55,8 +59,12 @@ control:
   clip_joint_targets: true
 
 command:
-  forward_velocity: 0.8
-  yaw_rate: 0.0
+  forward_velocity:
+    mode: fixed
+    value: 0.8
+  yaw_rate:
+    mode: fixed
+    value: 0.0
 
 observation:
   # 28D including body-frame base linear velocity. Old 25D PPO checkpoints
@@ -77,17 +85,15 @@ reward:
     action_rate_penalty: 0.03
     joint_velocity_penalty: 0.001
     torque_penalty: 0.002
-  # ------ v2 ---------|+
     wheel_longitudinal_offset_penalty: 0.10
   straight_stance:
     enabled: true
-    # 允许左右轮存在不超过 2 cm 的前后微小差异
+    # Ignore small left/right wheel longitudinal offsets below 2 cm.
     free_longitudinal_offset_m: 0.02
-    # 用于无量纲化；超过 free zone 4 cm 时，原始 penalty 约为 1
+    # Normalize offset beyond the free zone; 4 cm excess gives penalty 1.
     longitudinal_offset_scale_m: 0.04
-    # 只有接近直线时启用。以后有明显转向 command 时自动失效。
+    # Disable the regularizer when a future command requests a turn.
     yaw_rate_threshold: 0.05
-  # ------ v2 ---------|-
 
 termination:
   min_base_height: 0.25
@@ -97,7 +103,6 @@ termination:
 ppo:
   policy: MlpPolicy
   learning_rate: 0.0003
-  n_steps: 256
   batch_size: 64
   n_epochs: 10
   gamma: 0.99
@@ -114,8 +119,10 @@ ppo:
 training:
   total_timesteps: 1000000
   n_envs: 8
+  rollout_batch_size: 2048
   start_method: spawn
   eval_seed_offset: 10000
+  warm_start_checkpoint: null
 
 logging:
   log_interval_steps: 1000
@@ -127,5 +134,7 @@ callbacks:
   deterministic_eval: true
 
 play:
+  seed: 42
   deterministic: true
+  repeat_same_initial_state: false
   realtime_factor: 1.0

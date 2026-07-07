@@ -10,7 +10,7 @@ from stable_baselines3.common.vec_env import (
     VecMonitor,
 )
 
-from envs.slide_flat_factory import SlideEnvFactory
+from envs.slide_task_factory import SlideEnvFactory
 
 
 def _validate_parallel_config(n_envs: int, start_method: str) -> None:
