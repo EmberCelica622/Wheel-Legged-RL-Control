@@ -137,6 +137,7 @@ def test_slide_task_factory_selects_current_tasks() -> None:
         "slide_fixed_velocity_flat_v1_legacy": "slide_fixed_velocity_flat_v1_legacy.yaml",
         "slide_fixed_velocity_flat_v1": "slide_fixed_velocity_flat_v1.yaml",
         "slide_variable_velocity_flat_v2": "slide_variable_velocity_flat_v2.yaml",
+        "slide_dynamic_command_flat_v3": "slide_flat_v3.yaml",
     }
     for expected_task_id, filename in cases.items():
         cfg = load_slide_config(REPO_ROOT / "configs" / filename)
@@ -167,6 +168,21 @@ def test_deprecated_config_fields_normalize_to_task_metadata() -> None:
     fixed_cfg["experiment"]["env_variant"] = "v2"
     normalized_fixed = normalize_slide_config(fixed_cfg)
     assert slide_task_id(normalized_fixed) == "slide_fixed_velocity_flat_v1"
+
+    v3_cfg = copy.deepcopy(load_slide_config(REPO_ROOT / "configs" / "slide_flat_v3.yaml"))
+    v3_cfg.pop("task")
+    v3_cfg.setdefault("env", {})["version"] = "v3"
+    normalized_v3 = normalize_slide_config(v3_cfg)
+    assert slide_task_id(normalized_v3) == "slide_dynamic_command_flat_v3"
+
+    mismatched_cfg = copy.deepcopy(load_slide_config(REPO_ROOT / "configs" / "slide_flat_v3.yaml"))
+    mismatched_cfg["env"]["version"] = "v2"
+    try:
+        normalize_slide_config(mismatched_cfg)
+    except ValueError as exc:
+        assert "env.version" in str(exc)
+    else:
+        raise AssertionError("Mismatched env.version was accepted")
 
 
 def test_task_metadata_rejects_invalid_version() -> None:

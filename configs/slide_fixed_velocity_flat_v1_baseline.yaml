@@ -8,14 +8,13 @@ task:
   legacy: false
 
 experiment:
-  name: lr_1e4
+  name: baseline
 
 output:
   root_dir: runs
   run_id: auto
 
 env:
-  version: v1
   xml_path: assets/MujocoEnv/two_wheel_legged_robot_slide_flat.xml
 
 sim:
@@ -103,8 +102,8 @@ termination:
 
 ppo:
   policy: MlpPolicy
-  learning_rate: 0.0001
-  batch_size: 64
+  learning_rate: 0.0003
+  batch_size: 128
   n_epochs: 10
   gamma: 0.99
   gae_lambda: 0.95

@@ -24,13 +24,24 @@ from rl.ppo import create_ppo_model, warm_start_ppo_policy
 
 
 EXPECTED_DIAGNOSTICS = {
-    "diagnostics/wheel_longitudinal_offset",
-    "diagnostics/wheel_longitudinal_offset_abs_m",
-    "diagnostics/wheel_longitudinal_offset_excess_m",
-    "diagnostics/penalty_wheel_longitudinal_offset",
-    "diagnostics/straight_stance_gate",
-    "diagnostics/command_forward_velocity",
-    "diagnostics/command_yaw_rate",
+    "tracking/vx_error",
+    "tracking/vx_abs_error",
+    "tracking/yaw_rate_error",
+    "tracking/yaw_rate_abs_error",
+    "stability/base_height",
+    "stability/pitch",
+    "stability/roll",
+    "stability/pitch_rate",
+    "stability/roll_rate",
+    "stability/wheel_longitudinal_offset",
+    "smoothness/forward_delta_vx",
+    "smoothness/wheel_action_rate",
+    "smoothness/action_rate",
+    "effort/mean_leg_torque",
+    "effort/mean_wheel_torque",
+    "effort/torque_penalty",
+    "episode/fall_rate",
+    "episode/timeout_rate",
 }
 
 
@@ -129,7 +140,11 @@ def run_parallel_training_smoke(
         assert initial_obs.shape == (n_envs, 28)
         assert np.isfinite(initial_obs).all()
         assert len({row.tobytes() for row in initial_obs}) == n_envs
-        if slide_task_id(smoke_cfg) == "slide_variable_velocity_flat_v2":
+        dynamic_task_ids = {
+            "slide_variable_velocity_flat_v2",
+            "slide_dynamic_command_flat_v3",
+        }
+        if slide_task_id(smoke_cfg) in dynamic_task_ids:
             assert len({float(value) for value in initial_obs[:, 9]}) == n_envs
         else:
             assert np.allclose(initial_obs[:, 9:11], [0.8, 0.0])

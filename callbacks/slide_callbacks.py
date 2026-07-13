@@ -18,9 +18,16 @@ from common.task_identity import canonical_task_id_from_config
 class SlideDiagnosticsCallback(BaseCallback):
     """Aggregate slide-task diagnostics and publish scalar TensorBoard data."""
 
-    def __init__(self, log_interval_steps: int, verbose: int = 0):
+    def __init__(
+        self,
+        log_interval_steps: int,
+        *,
+        command_debug: bool = False,
+        verbose: int = 0,
+    ):
         super().__init__(verbose=verbose)
         self.log_interval_steps = max(int(log_interval_steps), 1)
+        self.command_debug = bool(command_debug)
         self._last_log_step = 0
         self._samples: dict[str, list[float]] = defaultdict(list)
 
@@ -35,58 +42,49 @@ class SlideDiagnosticsCallback(BaseCallback):
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
         for info in infos:
-            self._append("diagnostics/base_forward_velocity", info.get("base_forward_velocity"))
-            self._append("diagnostics/velocity_error", info.get("velocity_error"))
-            self._append("diagnostics/base_height", info.get("base_height"))
-            self._append("diagnostics/roll", info.get("roll"))
-            self._append("diagnostics/pitch", info.get("pitch"))
-            self._append("diagnostics/mean_abs_leg_torque", np.abs(info.get("tau_leg", [])))
-            self._append("diagnostics/mean_abs_wheel_torque", np.abs(info.get("tau_wheel", [])))
+            vx_error = info.get("velocity_error")
+            yaw_error = info.get("yaw_rate_error")
+            self._append("tracking/vx_error", vx_error)
+            self._append("tracking/vx_abs_error", None if vx_error is None else abs(float(vx_error)))
+            self._append("tracking/yaw_rate_error", yaw_error)
             self._append(
-                "diagnostics/mean_leg_joint_velocity",
-                info.get("mean_leg_joint_velocity"),
+                "tracking/yaw_rate_abs_error",
+                None if yaw_error is None else abs(float(yaw_error)),
             )
-            self._append("diagnostics/terminated_rate", float(info.get("terminated", False)))
-            self._append(
-                "diagnostics/command_forward_velocity",
-                info.get("command_forward_velocity"),
-            )
-            self._append("diagnostics/command_yaw_rate", info.get("command_yaw_rate"))
-            self._append(
-                "diagnostics/wheel_longitudinal_offset",
-                info.get("wheel_longitudinal_offset"),
-            )
+
+            self._append("stability/base_height", info.get("base_height"))
+            self._append("stability/pitch", info.get("pitch"))
+            self._append("stability/roll", info.get("roll"))
+            self._append("stability/pitch_rate", info.get("pitch_rate"))
+            self._append("stability/roll_rate", info.get("roll_rate"))
+            self._append("stability/wheel_longitudinal_offset", info.get("wheel_longitudinal_offset"))
+
+            self._append("smoothness/forward_delta_vx", info.get("forward_delta_vx"))
+            self._append("smoothness/wheel_action_rate", info.get("wheel_action_rate"))
+            self._append("smoothness/action_rate", info.get("action_rate"))
+
+            self._append("effort/mean_leg_torque", np.abs(info.get("tau_leg", [])))
+            self._append("effort/mean_wheel_torque", np.abs(info.get("tau_wheel", [])))
+
+            terminated = bool(info.get("terminated", False))
+            truncated = bool(info.get("truncated", False))
+            self._append("episode/fall_rate", float(terminated))
+            self._append("episode/timeout_rate", float(truncated))
+            if terminated or truncated:
+                self._append("episode/mean_length", info.get("episode_step"))
 
             reward_terms = info.get("reward_terms", {})
             if isinstance(reward_terms, dict):
+                self._append("effort/torque_penalty", reward_terms.get("torque_penalty"))
+
+            if self.command_debug:
+                self._append("command/current_vx_cmd", info.get("command_forward_velocity"))
+                self._append("command/current_yaw_rate_cmd", info.get("command_yaw_rate"))
+                self._append("command/target_vx_cmd", info.get("target_command_forward_velocity"))
+                self._append("command/target_yaw_rate_cmd", info.get("target_command_yaw_rate"))
                 self._append(
-                    "diagnostics/reward_forward_velocity_tracking",
-                    reward_terms.get("forward_velocity_tracking"),
-                )
-                self._append("diagnostics/reward_upright", reward_terms.get("upright"))
-                self._append(
-                    "diagnostics/penalty_action_rate",
-                    reward_terms.get("action_rate_penalty"),
-                )
-                self._append(
-                    "diagnostics/penalty_torque",
-                    reward_terms.get("torque_penalty"),
-                )
-                self._append(
-                    "diagnostics/wheel_longitudinal_offset_abs_m",
-                    reward_terms.get("wheel_longitudinal_offset_abs_m"),
-                )
-                self._append(
-                    "diagnostics/wheel_longitudinal_offset_excess_m",
-                    reward_terms.get("wheel_longitudinal_offset_excess_m"),
-                )
-                self._append(
-                    "diagnostics/penalty_wheel_longitudinal_offset",
-                    reward_terms.get("wheel_longitudinal_offset_penalty"),
-                )
-                self._append(
-                    "diagnostics/straight_stance_gate",
-                    reward_terms.get("straight_stance_gate"),
+                    "command/time_to_next_resample",
+                    info.get("time_to_next_command_resample"),
                 )
 
         if self.num_timesteps - self._last_log_step >= self.log_interval_steps:
@@ -117,7 +115,10 @@ def build_slide_callbacks(
     eval_freq = max(int(callback_cfg.get("eval_freq", 50000)) // divisor, 1)
 
     callbacks: list[BaseCallback] = [
-        SlideDiagnosticsCallback(int(logging_cfg.get("log_interval_steps", 1000))),
+        SlideDiagnosticsCallback(
+            int(logging_cfg.get("log_interval_steps", 1000)),
+            command_debug=bool(logging_cfg.get("command_debug", False)),
+        ),
         CheckpointCallback(
             save_freq=checkpoint_freq,
             save_path=str(run_paths.checkpoints),

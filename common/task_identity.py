@@ -73,6 +73,11 @@ def normalize_task_config(cfg: dict[str, Any]) -> dict[str, Any]:
     """Return a config whose task block is the only task identity source."""
     normalized = copy.deepcopy(cfg)
     identity = task_identity_from_config(normalized)
+    env_version = _env_version_from_config(normalized)
+    if env_version is not None and env_version != identity.version:
+        raise ValueError(
+            f"env.version {env_version!r} conflicts with task.version {identity.version!r}"
+        )
     normalized["task"] = identity.as_mapping()
 
     experiment = normalized.get("experiment")
@@ -82,7 +87,7 @@ def normalize_task_config(cfg: dict[str, Any]) -> dict[str, Any]:
 
     env_cfg = normalized.get("env")
     if isinstance(env_cfg, dict):
-        env_cfg.pop("version", None)
+        env_cfg["version"] = identity.version
 
     normalized["_task_id"] = identity.canonical_id
     return normalized
@@ -125,6 +130,8 @@ def _infer_deprecated_task_identity(cfg: dict[str, Any]) -> TaskIdentity:
 
     if variant == "v2":
         return TaskIdentity("slide", "variable_velocity", "flat", "v2", False)
+    if variant == "v3":
+        return TaskIdentity("slide", "dynamic_command", "flat", "v3", False)
     if variant == "v1":
         return TaskIdentity("slide", "fixed_velocity", "flat", "v1", _has_legacy_marker(cfg))
 
@@ -139,6 +146,16 @@ def _is_uniform_per_episode_forward_command(value: Any) -> bool:
         isinstance(value, dict)
         and str(value.get("mode", "")).strip().lower() == "uniform_per_episode"
     )
+
+
+def _env_version_from_config(cfg: dict[str, Any]) -> str | None:
+    env_cfg = cfg.get("env", {})
+    if not isinstance(env_cfg, dict) or "version" not in env_cfg:
+        return None
+    version = str(env_cfg["version"]).strip().lower()
+    if not _TASK_VERSION.fullmatch(version):
+        raise ValueError(f"env.version must look like 'v1', got {version!r}")
+    return version
 
 
 def _has_legacy_marker(cfg: dict[str, Any]) -> bool:

@@ -40,6 +40,24 @@ def test_spawn_vec_env_has_independent_finite_workers() -> None:
         env.close()
 
 
+def test_v3_spawn_vec_env_commands_are_independent_and_reproducible() -> None:
+    config_path = REPO_ROOT / "configs" / "slide_flat_v3.yaml"
+    env = create_training_vec_env(
+        config_path,
+        seed=321,
+        n_envs=2,
+        start_method="spawn",
+    )
+    try:
+        first_obs = env.reset()
+        env.seed(321)
+        second_obs = env.reset()
+        assert np.array_equal(first_obs[:, 9:11], second_obs[:, 9:11])
+        assert not np.array_equal(first_obs[0, 9:11], first_obs[1, 9:11])
+    finally:
+        env.close()
+
+
 def test_parallel_ppo_rollout_sizes_match() -> None:
     cfg = load_slide_config(REPO_ROOT / "configs" / "slide_variable_velocity_flat_v2.yaml")
     for n_envs, expected_n_steps in ((1, 2048), (4, 512), (8, 256)):

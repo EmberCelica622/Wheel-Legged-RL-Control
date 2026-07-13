@@ -2,20 +2,20 @@ seed: 42
 
 task:
   capability: slide
-  condition: fixed_velocity
+  condition: dynamic_command
   complexity: flat
-  version: v1
+  version: v3
   legacy: false
 
 experiment:
-  name: lr_1e4
+  name: lr
 
 output:
   root_dir: runs
-  run_id: auto
+  run_id: 1e4
 
 env:
-  version: v1
+  version: v3
   xml_path: assets/MujocoEnv/two_wheel_legged_robot_slide_flat.xml
 
 sim:
@@ -60,16 +60,22 @@ control:
   clip_joint_targets: true
 
 command:
+  mode: dynamic_per_episode
   forward_velocity:
-    mode: fixed
-    value: 0.8
+    range: [0.0, 1.5]
+    max_delta_per_resample: 0.35
+    max_rate: 0.5
   yaw_rate:
-    mode: fixed
-    value: 0.0
+    range: [-0.3, 0.3]
+    max_delta_per_resample: 0.15
+    max_rate: 0.35
+  resample_interval_s:
+    range: [2.0, 4.0]
+  initial_command:
+    forward_velocity_range: [0.0, 1.0]
+    yaw_rate_range: [-0.1, 0.1]
 
 observation:
-  # 28D including body-frame base linear velocity. Old 25D PPO checkpoints
-  # cannot be loaded into this environment.
   clip: 100.0
 
 reward:
@@ -89,11 +95,8 @@ reward:
     wheel_longitudinal_offset_penalty: 0.10
   straight_stance:
     enabled: true
-    # Ignore small left/right wheel longitudinal offsets below 2 cm.
     free_longitudinal_offset_m: 0.02
-    # Normalize offset beyond the free zone; 4 cm excess gives penalty 1.
     longitudinal_offset_scale_m: 0.04
-    # Disable the regularizer when a future command requests a turn.
     yaw_rate_threshold: 0.05
 
 termination:
@@ -104,7 +107,7 @@ termination:
 ppo:
   policy: MlpPolicy
   learning_rate: 0.0001
-  batch_size: 64
+  batch_size: 128
   n_epochs: 10
   gamma: 0.99
   gae_lambda: 0.95
@@ -116,19 +119,20 @@ ppo:
   device: cpu
   policy_kwargs:
     net_arch:
-      pi: [256, 256]
-      vf: [256, 256]
+      pi: [256, 512, 256]
+      vf: [256, 512, 256]
 
 training:
-  total_timesteps: 1000000
+  total_timesteps: 5000000
   n_envs: 8
   rollout_batch_size: 2048
   start_method: spawn
-  eval_seed_offset: 10000
+  eval_seed_offset: 2048
   warm_start_checkpoint: null
 
 logging:
-  log_interval_steps: 1000
+  log_interval_steps: 2048
+  command_debug: false
 
 callbacks:
   checkpoint_freq: 50000

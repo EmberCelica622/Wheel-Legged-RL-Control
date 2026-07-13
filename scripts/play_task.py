@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-kind", choices=("best", "final"), default="final")
     parser.add_argument("--seed", type=int, default=None, help="Override play.seed.")
     parser.add_argument("--command-vx", type=float, default=None, help="Fix vx for every reset.")
+    parser.add_argument("--command-yaw-rate", type=float, default=0.0, help="Yaw-rate used with --command-vx.")
     parser.add_argument(
         "--repeat-same-initial-state",
         dest="repeat_same_initial_state",
@@ -74,7 +75,14 @@ def _play(args: argparse.Namespace, selection: ModelSelection) -> None:
     )
     realtime_factor = max(realtime_factor, 1e-6)
     play_seed = int(args.seed if args.seed is not None else play_cfg.get("seed", cfg.get("seed", 1)))
-    reset_options = None if args.command_vx is None else {"command": [float(args.command_vx), 0.0]}
+    reset_options = (
+        None
+        if args.command_vx is None
+        else {
+            "command": [float(args.command_vx), float(args.command_yaw_rate)],
+            "fixed_command": True,
+        }
+    )
 
     seed_everything(play_seed)
     env = create_slide_env(cfg)
@@ -85,7 +93,13 @@ def _play(args: argparse.Namespace, selection: ModelSelection) -> None:
     print(f"Task: {slide_task_id(cfg)}")
     print(f"Model: {selection.model}")
     print(f"Play seed: {play_seed}, repeat_same_initial_state: {repeat_same}")
-    print("Command mode: fixed override" if reset_options else "Command mode: environment config")
+    if reset_options:
+        print(
+            "Command mode: fixed override "
+            f"vx={reset_options['command'][0]}, yaw_rate={reset_options['command'][1]}"
+        )
+    else:
+        print("Command mode: environment config")
 
     try:
         with mujoco.viewer.launch_passive(env.model, env.data) as viewer:

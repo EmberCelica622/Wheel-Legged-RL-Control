@@ -16,6 +16,7 @@ from envs.slide_fixed_velocity_flat_v1 import (
 from envs.slide_fixed_velocity_flat_v1_legacy import (
     SlideFixedVelocityFlatV1LegacyEnv,
 )
+from envs.slide_flat_v3 import SlideFlatV3Env
 from envs.slide_variable_velocity_flat_v2 import SlideVariableVelocityFlatV2Env
 
 
@@ -23,6 +24,7 @@ _ENV_CLASSES: dict[str, Type[gym.Env]] = {
     "slide_fixed_velocity_flat_v1_legacy": SlideFixedVelocityFlatV1LegacyEnv,
     "slide_fixed_velocity_flat_v1": SlideFixedVelocityFlatV1Env,
     "slide_variable_velocity_flat_v2": SlideVariableVelocityFlatV2Env,
+    "slide_dynamic_command_flat_v3": SlideFlatV3Env,
 }
 
 
@@ -59,13 +61,15 @@ def create_slide_env(
 class FixedCommandResetWrapper(gym.Wrapper):
     """Apply the same command override to every automatic episode reset."""
 
-    def __init__(self, env: gym.Env, command: list[float]):
+    def __init__(self, env: gym.Env, command: list[float], *, fixed_command: bool = True):
         super().__init__(env)
         self.command = list(command)
+        self.fixed_command = bool(fixed_command)
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         merged_options = dict(options or {})
         merged_options["command"] = self.command
+        merged_options["fixed_command"] = self.fixed_command
         return self.env.reset(seed=seed, options=merged_options)
 
 

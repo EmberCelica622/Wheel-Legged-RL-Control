@@ -12,7 +12,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
 
 from common.reproducibility import seed_everything
@@ -36,9 +35,70 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--episodes", type=int, default=5)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--command-vx", type=float, default=None)
+    parser.add_argument("--command-yaw-rate", type=float, default=0.0)
     parser.add_argument("--deterministic", dest="deterministic", action="store_true", default=True)
     parser.add_argument("--stochastic", dest="deterministic", action="store_false")
     return parser.parse_args()
+
+
+def _mean(values: list[float]) -> float:
+    return float(np.mean(values)) if values else 0.0
+
+
+def _evaluate_rollouts(
+    model,
+    env,
+    *,
+    episodes: int,
+    seed: int,
+    deterministic: bool,
+) -> dict[str, object]:
+    rewards: list[float] = []
+    lengths: list[int] = []
+    vx_errors: list[float] = []
+    vx_abs_errors: list[float] = []
+    yaw_errors: list[float] = []
+    yaw_abs_errors: list[float] = []
+    falls: list[float] = []
+    timeouts: list[float] = []
+
+    obs, _ = env.reset(seed=seed)
+    for episode_idx in range(max(int(episodes), 1)):
+        if episode_idx > 0:
+            obs, _ = env.reset()
+        episode_reward = 0.0
+        episode_length = 0
+        while True:
+            action, _ = model.predict(obs, deterministic=deterministic)
+            obs, reward, terminated, truncated, info = env.step(action)
+            episode_reward += float(reward)
+            episode_length += 1
+
+            vx_error = float(info.get("velocity_error", 0.0))
+            yaw_error = float(info.get("yaw_rate_error", 0.0))
+            vx_errors.append(vx_error)
+            vx_abs_errors.append(abs(vx_error))
+            yaw_errors.append(yaw_error)
+            yaw_abs_errors.append(abs(yaw_error))
+
+            if terminated or truncated:
+                rewards.append(episode_reward)
+                lengths.append(episode_length)
+                falls.append(float(terminated))
+                timeouts.append(float(truncated))
+                break
+
+    return {
+        "rewards": rewards,
+        "lengths": lengths,
+        "mean_vx_error": _mean(vx_errors),
+        "mean_vx_abs_error": _mean(vx_abs_errors),
+        "mean_yaw_rate_error": _mean(yaw_errors),
+        "mean_yaw_rate_abs_error": _mean(yaw_abs_errors),
+        "fall_rate": _mean(falls),
+        "timeout_rate": _mean(timeouts),
+        "mean_length": _mean([float(value) for value in lengths]),
+    }
 
 
 def main() -> None:
@@ -59,20 +119,24 @@ def main() -> None:
     seed_everything(seed)
     base_env = create_slide_env(cfg)
     if args.command_vx is not None:
-        base_env = FixedCommandResetWrapper(base_env, [float(args.command_vx), 0.0])
+        base_env = FixedCommandResetWrapper(
+            base_env,
+            [float(args.command_vx), float(args.command_yaw_rate)],
+        )
     env = Monitor(base_env)
-    env.reset(seed=seed)
     model = load_ppo_model(selection.model, env=env, cfg=cfg)
     try:
-        rewards, lengths = evaluate_policy(
+        rollout_metrics = _evaluate_rollouts(
             model,
             env,
-            n_eval_episodes=max(int(args.episodes), 1),
+            episodes=max(int(args.episodes), 1),
+            seed=seed,
             deterministic=bool(args.deterministic),
-            return_episode_rewards=True,
         )
     finally:
         env.close()
+    rewards = rollout_metrics["rewards"]
+    lengths = rollout_metrics["lengths"]
 
     selection.eval_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = selection.eval_dir / "metrics.json"
@@ -88,7 +152,19 @@ def main() -> None:
         "std_reward": float(np.std(rewards)),
         "episode_rewards": [float(value) for value in rewards],
         "episode_lengths": [int(value) for value in lengths],
+        "mean_vx_error": rollout_metrics["mean_vx_error"],
+        "mean_vx_abs_error": rollout_metrics["mean_vx_abs_error"],
+        "mean_yaw_rate_error": rollout_metrics["mean_yaw_rate_error"],
+        "mean_yaw_rate_abs_error": rollout_metrics["mean_yaw_rate_abs_error"],
+        "fall_rate": rollout_metrics["fall_rate"],
+        "timeout_rate": rollout_metrics["timeout_rate"],
+        "mean_length": rollout_metrics["mean_length"],
     }
+    if args.command_vx is not None:
+        metrics["fixed_command"] = {
+            "vx": float(args.command_vx),
+            "yaw_rate": float(args.command_yaw_rate),
+        }
     with metrics_path.open("w", encoding="utf-8") as stream:
         json.dump(metrics, stream, indent=2, sort_keys=True)
         stream.write("\n")

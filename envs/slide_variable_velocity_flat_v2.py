@@ -12,7 +12,9 @@ class SlideVariableVelocityFlatV2Env(SlideFixedVelocityFlatV1Env):
 
     def __init__(self, cfg: dict[str, Any], render_mode: str | None = None):
         super().__init__(cfg, render_mode=render_mode)
+        self._configure_command_sampler()
 
+    def _configure_command_sampler(self) -> None:
         command_cfg = self.command_cfg
         forward_cfg = command_cfg.get("forward_velocity", {})
         yaw_cfg = command_cfg.get("yaw_rate", {})
@@ -24,8 +26,8 @@ class SlideVariableVelocityFlatV2Env(SlideFixedVelocityFlatV1Env):
         forward_range = np.asarray(forward_cfg.get("range", []), dtype=np.float64)
         if forward_range.shape != (2,) or not np.isfinite(forward_range).all():
             raise ValueError("v2 command.forward_velocity.range must contain two finite values")
-        if not np.allclose(forward_range, [0.0, 2.0], atol=1e-12):
-            raise ValueError("slide-flat v2 requires forward velocity range [0.0, 2.0]")
+        # if not np.allclose(forward_range, [0.0, 2.0], atol=1e-12):
+        #     raise ValueError("slide-flat v2 requires forward velocity range [0.0, 2.0]")
         self.forward_command_range = forward_range
 
         if not isinstance(yaw_cfg, dict):

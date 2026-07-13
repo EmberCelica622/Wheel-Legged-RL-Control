@@ -220,6 +220,9 @@ class SlideFlatEnv(gym.Env):
         self.last_wheel_torque = np.zeros(2, dtype=np.float64)
         self.last_q_des = self.default_leg_pos.copy()
         self.last_wheel_vel_des = np.zeros(2, dtype=np.float64)
+        self.last_forward_delta_vx = 0.0
+        self.last_action_rate = 0.0
+        self.last_wheel_action_rate = 0.0
 
     @property
     def control_dt(self) -> float:
@@ -242,6 +245,10 @@ class SlideFlatEnv(gym.Env):
         override = self._command_override(options)
         self.command[:] = self.default_command if override is None else override
 
+    def _post_step_update_command(self) -> None:
+        """Hook for command schedules that update at control-step boundaries."""
+        return None
+
     def reset(
         self,
         *,
@@ -258,6 +265,9 @@ class SlideFlatEnv(gym.Env):
         self.last_wheel_torque[:] = 0.0
         self.last_q_des = self.default_leg_pos.copy()
         self.last_wheel_vel_des[:] = 0.0
+        self.last_forward_delta_vx = 0.0
+        self.last_action_rate = 0.0
+        self.last_wheel_action_rate = 0.0
 
         mujoco.mj_resetData(self.model, self.data)
         qpos = self.default_qpos.copy()
@@ -290,9 +300,13 @@ class SlideFlatEnv(gym.Env):
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         self.episode_step += 1
 
+        previous_forward_velocity = float(self._base_linear_velocity_body()[0])
         old_action = self.prev_action.copy()
         action = np.asarray(action, dtype=np.float64)
         action = np.clip(action, self.action_space.low, self.action_space.high)
+        action_delta = action - old_action
+        self.last_action_rate = float(np.mean(np.abs(action_delta)))
+        self.last_wheel_action_rate = float(np.mean(np.abs(action_delta[4:6])))
 
         # The policy target is held for one control interval, while torque is
         # recomputed from the latest joint state at every MuJoCo timestep.
@@ -300,6 +314,9 @@ class SlideFlatEnv(gym.Env):
         for _ in range(self.control_decimation):
             self._apply_pd_targets(q_des, wheel_vel_des)
             mujoco.mj_step(self.model, self.data)
+        self.last_forward_delta_vx = float(
+            self._base_linear_velocity_body()[0] - previous_forward_velocity
+        )
 
         reward, reward_terms = self._compute_reward(action, old_action)
         terminated, termination_reason = self._is_terminated()
@@ -307,6 +324,7 @@ class SlideFlatEnv(gym.Env):
 
         self.prev_action = action.copy()
         self.last_action = action.copy()
+        self._post_step_update_command()
 
         obs = self._get_obs()
         info = self._get_info()
@@ -497,6 +515,8 @@ class SlideFlatEnv(gym.Env):
             "base_height_penalty": height_error**2,
             "action_penalty": float(np.mean(action**2)),
             "action_rate_penalty": float(np.mean((action - old_action) ** 2)),
+            "action_rate": self.last_action_rate,
+            "wheel_action_rate": self.last_wheel_action_rate,
             "joint_velocity_penalty": float(np.mean(self._leg_vel() ** 2)),
             "torque_penalty": float(np.mean(all_torque**2)),
             "wheel_longitudinal_offset_abs_m": abs(wheel_longitudinal_offset),
@@ -538,22 +558,30 @@ class SlideFlatEnv(gym.Env):
 
     def _get_info(self) -> dict[str, Any]:
         roll, pitch, yaw = _quat_wxyz_to_roll_pitch_yaw(self._base_quat_wxyz())
+        base_lin_vel = self._base_linear_velocity_body()
+        base_ang_vel = self._base_angular_velocity_body()
         return {
             "episode_step": self.episode_step,
             "time": float(self.data.time),
             "base_height": self._base_height(),
-            "base_forward_velocity": float(self._base_linear_velocity_body()[0]),
-            "velocity_error": float(self._base_linear_velocity_body()[0] - self.command[0]),
-            "base_yaw_rate": float(self._base_angular_velocity_body()[2]),
+            "base_forward_velocity": float(base_lin_vel[0]),
+            "velocity_error": float(base_lin_vel[0] - self.command[0]),
+            "base_yaw_rate": float(base_ang_vel[2]),
+            "yaw_rate_error": float(base_ang_vel[2] - self.command[1]),
             "roll": float(roll),
             "pitch": float(pitch),
             "yaw": float(yaw),
+            "roll_rate": float(base_ang_vel[0]),
+            "pitch_rate": float(base_ang_vel[1]),
             "q_des": self.last_q_des.copy(),
             "wheel_vel_des": self.last_wheel_vel_des.copy(),
             "tau_leg": self.last_leg_torque.copy(),
             "tau_wheel": self.last_wheel_torque.copy(),
             "mean_leg_joint_velocity": float(np.mean(np.abs(self._leg_vel()))),
             "wheel_longitudinal_offset": self._wheel_longitudinal_offset(),
+            "forward_delta_vx": self.last_forward_delta_vx,
+            "action_rate": self.last_action_rate,
+            "wheel_action_rate": self.last_wheel_action_rate,
             "command_forward_velocity": float(self.command[0]),
             "command_yaw_rate": float(self.command[1]),
         }

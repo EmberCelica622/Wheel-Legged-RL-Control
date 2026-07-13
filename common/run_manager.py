@@ -264,7 +264,7 @@ def resolve_model_selection(
     config_path = resolve_existing_file(config, field="Config")
 
     inferred_run: RunPaths | None = None
-    if model_path.parent.name == "models":
+    if model_path.parent.name == "models" or model_path.parent.name == "checkpoints":
         candidate = RunPaths.from_run_dir(model_path.parent.parent)
         if candidate.config.is_file():
             inferred_run = candidate

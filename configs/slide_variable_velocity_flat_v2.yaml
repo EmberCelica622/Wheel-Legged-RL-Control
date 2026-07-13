@@ -8,13 +8,14 @@ task:
   legacy: false
 
 experiment:
-  name: ppo_pd_baseline
+  name: scratch_lr1e5
 
 output:
   root_dir: runs
   run_id: auto
 
 env:
+  version: v2
   xml_path: assets/MujocoEnv/two_wheel_legged_robot_slide_flat.xml
 
 sim:
@@ -61,7 +62,7 @@ control:
 command:
   forward_velocity:
     mode: uniform_per_episode
-    range: [0.0, 2.0]
+    range: [0.0, 1.2]
   yaw_rate:
     mode: fixed
     value: 0.0
@@ -97,8 +98,8 @@ termination:
 
 ppo:
   policy: MlpPolicy
-  learning_rate: 0.0003
-  batch_size: 64
+  learning_rate: 0.00001
+  batch_size: 128
   n_epochs: 10
   gamma: 0.99
   gae_lambda: 0.95
@@ -109,23 +110,25 @@ ppo:
   verbose: 1
   device: cpu
   policy_kwargs:
-    net_arch: [128, 128]
+    net_arch:
+      pi: [256, 512, 256]
+      vf: [256, 512, 256]
 
 training:
-  total_timesteps: 1000000
+  total_timesteps: 5000000
   n_envs: 8
   rollout_batch_size: 2048
   start_method: spawn
-  eval_seed_offset: 10000
+  eval_seed_offset: 2048
   warm_start_checkpoint: null
 
 logging:
-  log_interval_steps: 1000
+  log_interval_steps: 2048
 
 callbacks:
   checkpoint_freq: 50000
   eval_freq: 50000
-  n_eval_episodes: 5
+  n_eval_episodes: 20
   deterministic_eval: true
 
 play:
