@@ -41,7 +41,7 @@ def test_spawn_vec_env_has_independent_finite_workers() -> None:
 
 
 def test_v3_spawn_vec_env_commands_are_independent_and_reproducible() -> None:
-    config_path = REPO_ROOT / "configs" / "slide_flat_v3.yaml"
+    config_path = REPO_ROOT / "configs" / "slide_dynamic_command_flat_v3.yaml"
     env = create_training_vec_env(
         config_path,
         seed=321,

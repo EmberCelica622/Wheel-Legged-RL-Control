@@ -106,6 +106,7 @@ class SlideFlatEnv(gym.Env):
         if "timestep" in sim_cfg:
             self.model.opt.timestep = float(sim_cfg["timestep"])
         self.control_decimation = int(sim_cfg.get("control_decimation", 10))
+        self._control_dt = float(self.model.opt.timestep * self.control_decimation)
         self.max_episode_steps = int(sim_cfg.get("episode_length", 1000))
         self.reset_noise_scale = float(sim_cfg.get("reset_noise_scale", 0.0))
 
@@ -154,6 +155,8 @@ class SlideFlatEnv(gym.Env):
         self.wheel_qvel_addr = np.array([self.model.jnt_dofadr[jid] for jid in self.wheel_joint_ids])
 
         self.leg_joint_range = self.model.jnt_range[self.leg_joint_ids].copy()
+        self.leg_joint_lower = self.leg_joint_range[:, 0].copy()
+        self.leg_joint_upper = self.leg_joint_range[:, 1].copy()
         self.clip_joint_targets = bool(self.cfg.get("control", {}).get("clip_joint_targets", True))
 
         self.default_qpos = self._load_default_qpos(robot_cfg.get("stand_keyframe", "stand"))
@@ -188,6 +191,7 @@ class SlideFlatEnv(gym.Env):
         self.reward_cfg = self.cfg.get("reward", {})
         self.reward_weights = self.reward_cfg.get("weights", {})
         self.termination_cfg = self.cfg.get("termination", {})
+        self._initialize_static_runtime_parameters()
 
         # Straight-stance regularization is part of the v1 base task.
         stance_cfg = self.reward_cfg.get("straight_stance", {})
@@ -204,11 +208,15 @@ class SlideFlatEnv(gym.Env):
         if self.stance_offset_scale_m <= 0.0:
             raise ValueError("longitudinal_offset_scale_m must be positive.")
 
-        obs_clip = float(self.cfg.get("observation", {}).get("clip", 100.0))
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32)
         # The current observation schema is 28D. Checkpoints trained with the
         # 25D observation schema are intentionally incompatible.
-        self.observation_space = spaces.Box(low=-obs_clip, high=obs_clip, shape=(28,), dtype=np.float32)
+        self.observation_space = spaces.Box(
+            low=-self.observation_clip,
+            high=self.observation_clip,
+            shape=(28,),
+            dtype=np.float32,
+        )
 
         self.base_linvel_sensor = self._optional_sensor(robot_cfg.get("base_linear_velocity_sensor", "base_linear_velocity"))
         self.base_angvel_sensor = self._optional_sensor(robot_cfg.get("base_angular_velocity_sensor", "base_angular_velocity"))
@@ -226,7 +234,47 @@ class SlideFlatEnv(gym.Env):
 
     @property
     def control_dt(self) -> float:
-        return float(self.model.opt.timestep * self.control_decimation)
+        return self._control_dt
+
+    def _initialize_static_runtime_parameters(self) -> None:
+        """Read immutable config values once, after the MuJoCo model is available."""
+        observation_cfg = self.cfg.get("observation", {})
+        self.observation_clip = float(observation_cfg.get("clip", 100.0))
+
+        self.tracking_sigma = float(self.reward_cfg.get("tracking_sigma", 0.35))
+        self.yaw_sigma = float(self.reward_cfg.get("yaw_sigma", 0.5))
+        self.upright_sigma = float(self.reward_cfg.get("upright_sigma", 0.25))
+        self.target_base_height = float(
+            self.reward_cfg.get("target_base_height", self.default_qpos[2])
+        )
+        self._tracking_sigma_squared = max(self.tracking_sigma**2, 1e-6)
+        self._yaw_sigma_squared = max(self.yaw_sigma**2, 1e-6)
+        self._upright_sigma = max(self.upright_sigma, 1e-6)
+
+        weights = self.reward_weights
+        self._forward_velocity_tracking_weight = float(
+            weights.get("forward_velocity_tracking", 1.5)
+        )
+        self._yaw_rate_tracking_weight = float(weights.get("yaw_rate_tracking", 0.4))
+        self._upright_weight = float(weights.get("upright", 0.5))
+        self._base_height_penalty_weight = float(weights.get("base_height_penalty", 2.0))
+        self._action_penalty_weight = float(weights.get("action_penalty", 0.01))
+        self._action_rate_penalty_weight = float(weights.get("action_rate_penalty", 0.03))
+        self._joint_velocity_penalty_weight = float(
+            weights.get("joint_velocity_penalty", 0.001)
+        )
+        self._torque_penalty_weight = float(weights.get("torque_penalty", 0.002))
+        self._wheel_longitudinal_offset_penalty_weight = float(
+            weights.get("wheel_longitudinal_offset_penalty", 0.0)
+        )
+
+        self.min_base_height = float(self.termination_cfg.get("min_base_height", 0.25))
+        self.max_roll = float(self.termination_cfg.get("max_roll", 0.75))
+        self.max_pitch = float(self.termination_cfg.get("max_pitch", 0.75))
+        self._leg_torque_normalizer = np.maximum(self.leg_torque_limit, 1e-6)
+        self._wheel_torque_normalizer = np.maximum(self.wheel_torque_limit, 1e-6)
+        self._world_gravity_direction = np.array([0.0, 0.0, -1.0], dtype=np.float64)
+        self._base_height_observation = np.empty(1, dtype=np.float64)
 
     def _command_override(self, options: dict[str, Any] | None) -> np.ndarray | None:
         if not options or "command" not in options:
@@ -318,7 +366,7 @@ class SlideFlatEnv(gym.Env):
             self._base_linear_velocity_body()[0] - previous_forward_velocity
         )
 
-        reward, reward_terms = self._compute_reward(action, old_action)
+        reward, reward_terms, weighted_reward_terms = self._compute_reward(action, old_action)
         terminated, termination_reason = self._is_terminated()
         truncated = (not terminated) and self.episode_step >= self.max_episode_steps
 
@@ -329,6 +377,8 @@ class SlideFlatEnv(gym.Env):
         obs = self._get_obs()
         info = self._get_info()
         info["reward_terms"] = reward_terms
+        info["weighted_reward_terms"] = weighted_reward_terms
+        info["reward_total"] = float(reward)
         info["terminated"] = bool(terminated)
         info["truncated"] = bool(truncated)
         if termination_reason:
@@ -392,8 +442,7 @@ class SlideFlatEnv(gym.Env):
         return self._base_rotmat().T @ self.data.qvel[3:6]
 
     def _projected_gravity(self) -> np.ndarray:
-        world_gravity = np.array([0.0, 0.0, -1.0], dtype=np.float64)
-        return self._base_rotmat().T @ world_gravity
+        return self._base_rotmat().T @ self._world_gravity_direction
 
     def _base_height(self) -> float:
         return float(self.data.xpos[self.base_body_id, 2])
@@ -423,7 +472,7 @@ class SlideFlatEnv(gym.Env):
         # pose. The target remains fixed for the full control interval.
         q_des = self.default_leg_pos + action[:4] * self.joint_action_scale
         if self.clip_joint_targets:
-            q_des = np.clip(q_des, self.leg_joint_range[:, 0], self.leg_joint_range[:, 1])
+            q_des = np.clip(q_des, self.leg_joint_lower, self.leg_joint_upper)
 
         # Policy action[4:6] is a normalized wheel angular velocity command.
         wheel_vel_des = self.wheel_vel_bias + action[4:6] * self.wheel_vel_scale
@@ -453,6 +502,7 @@ class SlideFlatEnv(gym.Env):
         self.last_wheel_torque = tau_wheel.copy()
 
     def _get_obs(self) -> np.ndarray:
+        self._base_height_observation[0] = self._base_height()
         obs = np.concatenate(
             [
                 self._base_linear_velocity_body(),
@@ -462,33 +512,31 @@ class SlideFlatEnv(gym.Env):
                 self._leg_pos() - self.default_leg_pos,
                 self._leg_vel(),
                 self._wheel_vel(),
-                np.array([self._base_height()], dtype=np.float64),
+                self._base_height_observation,
                 self.prev_action,
             ]
         )
-        obs_clip = float(self.cfg.get("observation", {}).get("clip", 100.0))
-        obs = np.clip(obs, -obs_clip, obs_clip)
+        obs = np.clip(obs, -self.observation_clip, self.observation_clip)
         return obs.astype(np.float32)
 
-    def _compute_reward(self, action: np.ndarray, old_action: np.ndarray) -> tuple[float, dict[str, float]]:
+    def _compute_reward(
+        self,
+        action: np.ndarray,
+        old_action: np.ndarray,
+    ) -> tuple[float, dict[str, float], dict[str, float]]:
         base_lin_vel = self._base_linear_velocity_body()
         base_ang_vel = self._base_angular_velocity_body()
         projected_gravity = self._projected_gravity()
 
-        tracking_sigma = float(self.reward_cfg.get("tracking_sigma", 0.35))
-        yaw_sigma = float(self.reward_cfg.get("yaw_sigma", 0.5))
-        upright_sigma = float(self.reward_cfg.get("upright_sigma", 0.25))
-        target_base_height = float(self.reward_cfg.get("target_base_height", self.default_qpos[2]))
-
         forward_error = base_lin_vel[0] - self.command[0]
         yaw_error = base_ang_vel[2] - self.command[1]
         tilt_error = projected_gravity[0] ** 2 + projected_gravity[1] ** 2
-        height_error = self._base_height() - target_base_height
+        height_error = self._base_height() - self.target_base_height
 
         all_torque = np.concatenate(
             [
-                self.last_leg_torque / np.maximum(self.leg_torque_limit, 1e-6),
-                self.last_wheel_torque / np.maximum(self.wheel_torque_limit, 1e-6),
+                self.last_leg_torque / self._leg_torque_normalizer,
+                self.last_wheel_torque / self._wheel_torque_normalizer,
             ]
         )
 
@@ -509,9 +557,9 @@ class SlideFlatEnv(gym.Env):
         ) ** 2
 
         terms = {
-            "forward_velocity_tracking": math.exp(-(forward_error**2) / max(tracking_sigma**2, 1e-6)),
-            "yaw_rate_tracking": math.exp(-(yaw_error**2) / max(yaw_sigma**2, 1e-6)),
-            "upright": math.exp(-tilt_error / max(upright_sigma, 1e-6)),
+            "forward_velocity_tracking": math.exp(-(forward_error**2) / self._tracking_sigma_squared),
+            "yaw_rate_tracking": math.exp(-(yaw_error**2) / self._yaw_sigma_squared),
+            "upright": math.exp(-tilt_error / self._upright_sigma),
             "base_height_penalty": height_error**2,
             "action_penalty": float(np.mean(action**2)),
             "action_rate_penalty": float(np.mean((action - old_action) ** 2)),
@@ -525,33 +573,37 @@ class SlideFlatEnv(gym.Env):
             "straight_stance_gate": straight_gate,
         }
 
-        weights = self.reward_weights
-        reward = (
-            float(weights.get("forward_velocity_tracking", 1.5)) * terms["forward_velocity_tracking"]
-            + float(weights.get("yaw_rate_tracking", 0.4)) * terms["yaw_rate_tracking"]
-            + float(weights.get("upright", 0.5)) * terms["upright"]
-            - float(weights.get("base_height_penalty", 2.0)) * terms["base_height_penalty"]
-            - float(weights.get("action_penalty", 0.01)) * terms["action_penalty"]
-            - float(weights.get("action_rate_penalty", 0.03)) * terms["action_rate_penalty"]
-            - float(weights.get("joint_velocity_penalty", 0.001)) * terms["joint_velocity_penalty"]
-            - float(weights.get("torque_penalty", 0.002)) * terms["torque_penalty"]
-            - float(weights.get("wheel_longitudinal_offset_penalty", 0.0)) * terms["wheel_longitudinal_offset_penalty"]
+        weighted_terms = {
+            "forward_velocity_tracking": self._forward_velocity_tracking_weight
+            * terms["forward_velocity_tracking"],
+            "yaw_rate_tracking": self._yaw_rate_tracking_weight * terms["yaw_rate_tracking"],
+            "upright": self._upright_weight * terms["upright"],
+            "base_height_penalty": -self._base_height_penalty_weight * terms["base_height_penalty"],
+            "action_penalty": -self._action_penalty_weight * terms["action_penalty"],
+            "action_rate_penalty": -self._action_rate_penalty_weight
+            * terms["action_rate_penalty"],
+            "joint_velocity_penalty": -self._joint_velocity_penalty_weight
+            * terms["joint_velocity_penalty"],
+            "torque_penalty": -self._torque_penalty_weight * terms["torque_penalty"],
+            "wheel_longitudinal_offset_penalty": -self._wheel_longitudinal_offset_penalty_weight
+            * terms["wheel_longitudinal_offset_penalty"],
+        }
+        reward = float(sum(weighted_terms.values()))
+
+        return (
+            reward,
+            {key: float(value) for key, value in terms.items()},
+            {key: float(value) for key, value in weighted_terms.items()},
         )
 
-        return float(reward), {key: float(value) for key, value in terms.items()}
-
     def _is_terminated(self) -> tuple[bool, str | None]:
-        min_base_height = float(self.termination_cfg.get("min_base_height", 0.25))
-        max_roll = float(self.termination_cfg.get("max_roll", 0.75))
-        max_pitch = float(self.termination_cfg.get("max_pitch", 0.75))
-
-        if self._base_height() < min_base_height:
+        if self._base_height() < self.min_base_height:
             return True, "base_height_too_low"
 
         roll, pitch, _ = _quat_wxyz_to_roll_pitch_yaw(self._base_quat_wxyz())
-        if abs(roll) > max_roll:
+        if abs(roll) > self.max_roll:
             return True, "roll_too_large"
-        if abs(pitch) > max_pitch:
+        if abs(pitch) > self.max_pitch:
             return True, "pitch_too_large"
 
         return False, None

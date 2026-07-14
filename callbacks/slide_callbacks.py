@@ -30,6 +30,7 @@ class SlideDiagnosticsCallback(BaseCallback):
         self.command_debug = bool(command_debug)
         self._last_log_step = 0
         self._samples: dict[str, list[float]] = defaultdict(list)
+        self._reward_samples: dict[str, list[float]] = defaultdict(list)
 
     def _append(self, name: str, value: Any) -> None:
         scalar = np.asarray(value, dtype=np.float64)
@@ -38,6 +39,14 @@ class SlideDiagnosticsCallback(BaseCallback):
         value_float = float(np.mean(scalar))
         if np.isfinite(value_float):
             self._samples[name].append(value_float)
+
+    def _append_reward_sample(self, name: str, value: Any) -> None:
+        scalar = np.asarray(value, dtype=np.float64)
+        if scalar.size == 0:
+            return
+        value_float = float(np.mean(np.abs(scalar)))
+        if np.isfinite(value_float):
+            self._reward_samples[name].append(value_float)
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
@@ -75,7 +84,15 @@ class SlideDiagnosticsCallback(BaseCallback):
 
             reward_terms = info.get("reward_terms", {})
             if isinstance(reward_terms, dict):
+                for term_name, term_value in reward_terms.items():
+                    self._append_reward_sample(f"reward/raw/{term_name}", term_value)
                 self._append("effort/torque_penalty", reward_terms.get("torque_penalty"))
+
+            weighted_reward_terms = info.get("weighted_reward_terms", {})
+            if isinstance(weighted_reward_terms, dict):
+                for term_name, term_value in weighted_reward_terms.items():
+                    self._append_reward_sample(f"reward/weighted/{term_name}", term_value)
+            self._append_reward_sample("reward/total", info.get("reward_total"))
 
             if self.command_debug:
                 self._append("command/current_vx_cmd", info.get("command_forward_velocity"))
@@ -97,6 +114,12 @@ class SlideDiagnosticsCallback(BaseCallback):
             self._last_log_step = self.num_timesteps
 
         return True
+
+    def _on_rollout_end(self) -> None:
+        for name, values in self._reward_samples.items():
+            if values:
+                self.logger.record(name, float(np.mean(values)))
+        self._reward_samples.clear()
 
 
 def build_slide_callbacks(

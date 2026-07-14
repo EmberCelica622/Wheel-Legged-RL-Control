@@ -14,7 +14,9 @@ from envs.slide_task_factory import create_slide_env, load_slide_config
 
 
 def _fast_v3_config() -> dict:
-    cfg = copy.deepcopy(load_slide_config(REPO_ROOT / "configs" / "slide_flat_v3.yaml"))
+    cfg = copy.deepcopy(
+        load_slide_config(REPO_ROOT / "configs" / "slide_dynamic_command_flat_v3.yaml")
+    )
     cfg["command"]["resample_interval_s"]["range"] = [0.02, 0.02]
     return cfg
 
@@ -82,7 +84,9 @@ def test_v2_same_seed_is_reproducible() -> None:
 
 def test_v3_shapes_match_v2() -> None:
     v2_env = create_slide_env(load_slide_config(REPO_ROOT / "configs" / "slide_variable_velocity_flat_v2.yaml"))
-    v3_env = create_slide_env(load_slide_config(REPO_ROOT / "configs" / "slide_flat_v3.yaml"))
+    v3_env = create_slide_env(
+        load_slide_config(REPO_ROOT / "configs" / "slide_dynamic_command_flat_v3.yaml")
+    )
     try:
         assert v3_env.observation_space.shape == v2_env.observation_space.shape == (28,)
         assert v3_env.action_space.shape == v2_env.action_space.shape == (6,)

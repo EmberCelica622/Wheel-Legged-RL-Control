@@ -137,7 +137,7 @@ def test_slide_task_factory_selects_current_tasks() -> None:
         "slide_fixed_velocity_flat_v1_legacy": "slide_fixed_velocity_flat_v1_legacy.yaml",
         "slide_fixed_velocity_flat_v1": "slide_fixed_velocity_flat_v1.yaml",
         "slide_variable_velocity_flat_v2": "slide_variable_velocity_flat_v2.yaml",
-        "slide_dynamic_command_flat_v3": "slide_flat_v3.yaml",
+        "slide_dynamic_command_flat_v3": "slide_dynamic_command_flat_v3.yaml",
     }
     for expected_task_id, filename in cases.items():
         cfg = load_slide_config(REPO_ROOT / "configs" / filename)
@@ -147,6 +147,44 @@ def test_slide_task_factory_selects_current_tasks() -> None:
             obs, _ = env.reset(seed=int(cfg["seed"]))
             assert obs.shape == (28,)
             assert np.isfinite(obs).all()
+        finally:
+            env.close()
+
+
+def test_all_slide_variants_step_with_finite_runtime_outputs() -> None:
+    cases = {
+        "slide_fixed_velocity_flat_v1_legacy": "slide_fixed_velocity_flat_v1_legacy.yaml",
+        "slide_fixed_velocity_flat_v1": "slide_fixed_velocity_flat_v1.yaml",
+        "slide_variable_velocity_flat_v2": "slide_variable_velocity_flat_v2.yaml",
+        "slide_dynamic_command_flat_v3": "slide_dynamic_command_flat_v3.yaml",
+    }
+    action_rng = np.random.default_rng(20260715)
+
+    for expected_task_id, filename in cases.items():
+        cfg = load_slide_config(REPO_ROOT / "configs" / filename)
+        env = create_slide_env(cfg)
+        try:
+            obs, _ = env.reset(seed=123)
+            assert slide_task_id(cfg) == expected_task_id
+            assert obs.shape == env.observation_space.shape == (28,)
+            assert obs.dtype == np.float32
+            assert env.action_space.shape == (6,)
+            assert env.control_dt == cfg["sim"]["timestep"] * cfg["sim"]["control_decimation"]
+            assert env.observation_clip == cfg["observation"]["clip"]
+
+            for _ in range(16):
+                action = action_rng.uniform(-1.0, 1.0, size=6).astype(np.float32)
+                obs, reward, terminated, truncated, info = env.step(action)
+                assert obs.shape == (28,)
+                assert obs.dtype == np.float32
+                assert np.isfinite(obs).all()
+                assert np.isfinite(reward)
+                assert set(info["weighted_reward_terms"]) <= set(info["reward_terms"])
+                assert np.isfinite(list(info["reward_terms"].values())).all()
+                assert np.isfinite(list(info["weighted_reward_terms"].values())).all()
+                if terminated or truncated:
+                    obs, _ = env.reset()
+                    assert obs.shape == (28,)
         finally:
             env.close()
 
@@ -169,13 +207,17 @@ def test_deprecated_config_fields_normalize_to_task_metadata() -> None:
     normalized_fixed = normalize_slide_config(fixed_cfg)
     assert slide_task_id(normalized_fixed) == "slide_fixed_velocity_flat_v1"
 
-    v3_cfg = copy.deepcopy(load_slide_config(REPO_ROOT / "configs" / "slide_flat_v3.yaml"))
+    v3_cfg = copy.deepcopy(
+        load_slide_config(REPO_ROOT / "configs" / "slide_dynamic_command_flat_v3.yaml")
+    )
     v3_cfg.pop("task")
     v3_cfg.setdefault("env", {})["version"] = "v3"
     normalized_v3 = normalize_slide_config(v3_cfg)
     assert slide_task_id(normalized_v3) == "slide_dynamic_command_flat_v3"
 
-    mismatched_cfg = copy.deepcopy(load_slide_config(REPO_ROOT / "configs" / "slide_flat_v3.yaml"))
+    mismatched_cfg = copy.deepcopy(
+        load_slide_config(REPO_ROOT / "configs" / "slide_dynamic_command_flat_v3.yaml")
+    )
     mismatched_cfg["env"]["version"] = "v2"
     try:
         normalize_slide_config(mismatched_cfg)

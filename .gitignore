@@ -1,14 +1,17 @@
 **/__pycache__/
+.pytest_cache
 *.py[cod]
 .vscode/
 .codex/
 .agents/
 AGENTS.override.md
 progress.md
+problem.md
 repo_tree.txt
 
 # Generated experiment artifacts. Existing files remain untouched on disk.
 runs/
+img/
 logs/
 models/
 checkpoints/

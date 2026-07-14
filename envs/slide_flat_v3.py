@@ -85,6 +85,18 @@ class SlideFlatV3Env(SlideVariableVelocityFlatV2Env):
             ],
             dtype=np.float64,
         )
+        self._command_lower_bounds = np.array(
+            [self.forward_command_range[0], self.yaw_command_range[0]],
+            dtype=np.float64,
+        )
+        self._command_upper_bounds = np.array(
+            [self.forward_command_range[1], self.yaw_command_range[1]],
+            dtype=np.float64,
+        )
+        self._max_command_delta_per_resample = np.array(
+            [self.forward_max_delta_per_resample, self.yaw_max_delta_per_resample],
+            dtype=np.float64,
+        )
 
         if not (
             self.forward_command_range[0]
@@ -108,11 +120,11 @@ class SlideFlatV3Env(SlideVariableVelocityFlatV2Env):
 
     @property
     def command_lower_bounds(self) -> np.ndarray:
-        return np.array([self.forward_command_range[0], self.yaw_command_range[0]], dtype=np.float64)
+        return self._command_lower_bounds.copy()
 
     @property
     def command_upper_bounds(self) -> np.ndarray:
-        return np.array([self.forward_command_range[1], self.yaw_command_range[1]], dtype=np.float64)
+        return self._command_upper_bounds.copy()
 
     def _command_override(self, options: dict[str, Any] | None) -> np.ndarray | None:
         if not options or "command" not in options:
@@ -166,15 +178,15 @@ class SlideFlatV3Env(SlideVariableVelocityFlatV2Env):
             ],
             dtype=np.float64,
         )
-        max_delta = np.array(
-            [self.forward_max_delta_per_resample, self.yaw_max_delta_per_resample],
-            dtype=np.float64,
+        delta = np.clip(
+            sampled - self.target_command,
+            -self._max_command_delta_per_resample,
+            self._max_command_delta_per_resample,
         )
-        delta = np.clip(sampled - self.target_command, -max_delta, max_delta)
         self.target_command = np.clip(
             self.target_command + delta,
-            self.command_lower_bounds,
-            self.command_upper_bounds,
+            self._command_lower_bounds,
+            self._command_upper_bounds,
         )
 
     def _reset_command(self, options: dict[str, Any] | None) -> None:
@@ -200,8 +212,8 @@ class SlideFlatV3Env(SlideVariableVelocityFlatV2Env):
         delta = np.clip(self.target_command - self.current_command, -max_step, max_step)
         self.current_command = np.clip(
             self.current_command + delta,
-            self.command_lower_bounds,
-            self.command_upper_bounds,
+            self._command_lower_bounds,
+            self._command_upper_bounds,
         )
         self.command[:] = self.current_command
 
