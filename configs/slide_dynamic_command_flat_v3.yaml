@@ -134,6 +134,7 @@ training:
 logging:
   log_interval_steps: 2048
   command_debug: false
+  human_output_max_length: 96
 
 callbacks:
   checkpoint_freq: 50000

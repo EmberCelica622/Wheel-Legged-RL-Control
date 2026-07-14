@@ -116,7 +116,7 @@ def run_parallel_training_smoke(
         {
             "batch_size": 64,
             "n_epochs": 1,
-            "verbose": 0,
+            "verbose": 1,
             "policy_kwargs": {"net_arch": [32, 32]},
         }
     )

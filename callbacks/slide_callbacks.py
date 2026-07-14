@@ -10,6 +10,7 @@ from stable_baselines3.common.callbacks import (
     CheckpointCallback,
     EvalCallback,
 )
+from stable_baselines3.common.logger import HumanOutputFormat
 
 from common.run_manager import RunPaths
 from common.task_identity import canonical_task_id_from_config
@@ -23,11 +24,13 @@ class SlideDiagnosticsCallback(BaseCallback):
         log_interval_steps: int,
         *,
         command_debug: bool = False,
+        human_output_max_length: int = 96,
         verbose: int = 0,
     ):
         super().__init__(verbose=verbose)
         self.log_interval_steps = max(int(log_interval_steps), 1)
         self.command_debug = bool(command_debug)
+        self.human_output_max_length = max(int(human_output_max_length), 36)
         self._last_log_step = 0
         self._samples: dict[str, list[float]] = defaultdict(list)
         self._reward_samples: dict[str, list[float]] = defaultdict(list)
@@ -47,6 +50,12 @@ class SlideDiagnosticsCallback(BaseCallback):
         value_float = float(np.mean(np.abs(scalar)))
         if np.isfinite(value_float):
             self._reward_samples[name].append(value_float)
+
+    def _on_training_start(self) -> None:
+        """Keep long reward tags distinct in SB3's stdout table."""
+        for output_format in self.logger.output_formats:
+            if isinstance(output_format, HumanOutputFormat):
+                output_format.max_length = self.human_output_max_length
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
@@ -141,6 +150,7 @@ def build_slide_callbacks(
         SlideDiagnosticsCallback(
             int(logging_cfg.get("log_interval_steps", 1000)),
             command_debug=bool(logging_cfg.get("command_debug", False)),
+            human_output_max_length=int(logging_cfg.get("human_output_max_length", 96)),
         ),
         CheckpointCallback(
             save_freq=checkpoint_freq,
